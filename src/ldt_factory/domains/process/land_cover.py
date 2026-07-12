@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+import logging
+
+from ...checkpoint_utils import (
+    checkpoint_matches,
+    path_signature,
+    write_checkpoint_manifest,
+    write_frame_csv_atomic,
+    write_frame_parquet_atomic,
+)
+from ...context import RunContext
+from ...geo import load_admin2
+from ...io_utils import require_files
+from ...logging_utils import logged_action
+from ...raster_utils import validate_categorical_raster
+from ..extract.land_cover import NODATA_CLASS
+
+DYNAMIC_WORLD_CLASSES = {
+    0: "water",
+    1: "tree",
+    2: "grass",
+    3: "flood_vegetation",
+    4: "crops",
+    5: "shrub_and_scrub",
+    6: "built",
+    7: "bare",
+    8: "snow_and_ice",
+}
+
+
+def derive_indicators(class_counts, admin1: str, admin2: str, baseline_year: int, output_years: list[int], pixel_size_m: float):
+    """Reproduce the notebook's class-share changes and crop area calculation."""
+    import numpy as np
+    import pandas as pd
+
+    frame = class_counts.copy()
+    class_columns = list(DYNAMIC_WORLD_CLASSES.values())
+    frame[class_columns] = frame[class_columns].fillna(0)
+
+    # The notebook currently uses mean(axis=1). Sum is the intended denominator
+    # for a class share. The factor would cancel in the relative-change formula,
+    # but sum makes built_pct and tree_pct meaningful proportions.
+    frame["total"] = frame[class_columns].sum(axis=1)
+    frame["built_pct"] = np.where(frame["total"] > 0, frame["built"] / frame["total"], np.nan)
+    frame["tree_pct"] = np.where(frame["total"] > 0, frame["tree"] / frame["total"], np.nan)
+
+    baseline = frame[frame["year"] == baseline_year][
+        [admin1, admin2, "built_pct", "tree_pct"]
+    ].rename(columns={"built_pct": "built_pct_baseline", "tree_pct": "tree_pct_baseline"})
+    if baseline.duplicated([admin1, admin2]).any():
+        raise ValueError("Land-cover baseline has duplicate administrative keys")
+
+    output = frame[frame["year"].isin(output_years)].merge(
+        baseline, on=[admin1, admin2], how="left", validate="many_to_one"
+    )
+    output["built_pct_change"] = np.where(
+        output["built_pct_baseline"] > 0,
+        100.0 * (output["built_pct"] - output["built_pct_baseline"]) / output["built_pct_baseline"],
+        np.nan,
+    )
+    output["tree_pct_change"] = np.where(
+        output["tree_pct_baseline"] > 0,
+        100.0 * (output["tree_pct"] - output["tree_pct_baseline"]) / output["tree_pct_baseline"],
+        np.nan,
+    )
+    output["agri_land"] = output["crops"] * (pixel_size_m**2 / 1_000_000.0)
+    return output[[admin1, admin2, "year", "built_pct_change", "tree_pct_change", "agri_land"]]
+
+
+def run(ctx: RunContext, logger: logging.Logger) -> None:
+    import pandas as pd
+    from rasterstats import zonal_stats
+
+    admin2 = load_admin2(ctx.config)
+    years = ctx.config.years("land_cover")
+    output_years = ctx.config.years("indicators")
+    baseline_year = years[0]
+    pixel_size_m = float(ctx.config.source("land_cover").get("pixel_size_m", 10))
+    rows = []
+    state_dir = ctx.config.workspace / "state" / "land_cover"
+    boundary_signature = path_signature(
+        ctx.config.boundary_path("admin2"), shapefile_family=True
+    )
+
+    with logged_action(logger, "process", domain="land_cover"):
+        for item_number, year in enumerate(years, start=1):
+            raster = ctx.raw("land_cover", f"{ctx.config.iso3}_{year}.tif")
+            require_files([raster], "land-cover rasters")
+            validate_categorical_raster(
+                raster,
+                valid_classes=set(DYNAMIC_WORLD_CLASSES),
+                expected_nodata=NODATA_CLASS,
+            )
+            checkpoint = state_dir / f"class_counts_{year}.parquet"
+            manifest = checkpoint.with_suffix(".manifest.json")
+            expected = {
+                "algorithm": "dynamic-world-zonal-counts-v2",
+                "raster": path_signature(raster),
+                "boundary": boundary_signature,
+                "classes": DYNAMIC_WORLD_CLASSES,
+                "nodata": NODATA_CLASS,
+            }
+            if checkpoint_matches(checkpoint, manifest, expected):
+                frame = pd.read_parquet(checkpoint)
+                logger.info(
+                    "reused land-cover checkpoint year=%d item=%d/%d rows=%d",
+                    year,
+                    item_number,
+                    len(years),
+                    len(frame),
+                    extra={"action": "checkpoint_reuse", "domain": "land_cover", "phase": str(year), "path": str(checkpoint)},
+                )
+            else:
+                with logged_action(
+                    logger,
+                    "zonal_counts",
+                    domain="land_cover",
+                    phase=str(year),
+                    path=str(raster),
+                ):
+                    stats = zonal_stats(
+                        admin2.geometry,
+                        raster,
+                        categorical=True,
+                        nodata=NODATA_CLASS,
+                    )
+                    frame = admin2[[ctx.config.admin1, ctx.config.admin2]].copy()
+                    frame["year"] = year
+                    for class_id, class_name in DYNAMIC_WORLD_CLASSES.items():
+                        frame[class_name] = [float(item.get(class_id, 0)) for item in stats]
+                    write_frame_parquet_atomic(frame, checkpoint)
+                    write_checkpoint_manifest(manifest, expected, rows=len(frame))
+            rows.append(frame)
+
+        class_counts = pd.concat(rows, ignore_index=True)
+        output = derive_indicators(
+            class_counts,
+            ctx.config.admin1,
+            ctx.config.admin2,
+            baseline_year,
+            output_years,
+            pixel_size_m,
+        )
+        write_frame_csv_atomic(output, ctx.output("lulc.csv"))
+        logger.info("land-cover rows=%d", len(output), extra={"domain": "land_cover"})

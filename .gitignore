@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local credentials for WB LDT pipeline runs
+secrets.ps1

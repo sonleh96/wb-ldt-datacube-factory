@@ -1,0 +1,142 @@
+schema_version: 1
+
+network:
+  # This machine exposes dead HTTP(S)_PROXY variables (127.0.0.1:9).
+  # Public source downloads must connect directly, like curl in CMD.
+  use_environment_proxy: false
+
+country:
+  iso3: ROU
+  name: Romania
+  continent: europe
+  timezone: Europe/Bucharest
+
+workspace: D:/Work/WB/LDT/countries/ROU
+
+boundaries:
+  admin0: D:/Work/WB/LDT/countries/ROU/rou_admin_boundaries.shp/rou_admin0_em.shp
+  admin1: D:/Work/WB/LDT/countries/ROU/rou_admin_boundaries.shp/rou_admin1_em.shp
+  admin2: D:/Work/WB/LDT/countries/ROU/rou_admin_boundaries.shp/rou_admin2_em.shp
+  admin1_source_field: adm1_name
+  admin2_source_field: adm2_name
+  admin1_output_name: County
+  admin2_output_name: Municipality
+
+years:
+  # Join key used for static/snapshot domains in the 2021-2025 indicator panel.
+  # This is not the Flood hazard scenario year or Transport observation year.
+  static_merge: 2025
+  population: [2021, 2022, 2023, 2024, 2025]
+  indicators: [2021, 2022, 2023, 2024, 2025]
+  land_cover: [2017, 2021, 2022, 2023, 2024, 2025]
+  transport: 2026
+
+processing:
+  transport:
+    metric_crs: EPSG:6933
+    resume_from_checkpoints: true
+  flood:
+    depth_threshold_m: 0.3
+    batch_size: 50000
+    resume_from_checkpoints: true
+  emissions:
+    chunksize: 250000
+  internet:
+    mobile_prefix_zoom: 8
+
+sources:
+  osm:
+    url: https://download.geofabrik.de/europe/romania-260101-free.shp.zip
+    archive_name: romania-260101-free.shp.zip
+    extracted_dir: romania-260101-free.shp
+  climate_trace:
+    co2e_100yr_url: https://downloads.climatetrace.org/latest/country_packages/co2e_100yr/ROU.zip
+    ch4_url: https://downloads.climatetrace.org/latest/country_packages/ch4/ROU.zip
+  worldpop:
+    url_template: https://data.worldpop.org/GIS/Population/Global_2015_2030/R2025A/{year}/{iso3}/v1/100m/constrained/{iso3_lower}_pop_{year}_CN_100m_R2025A_v1.tif
+  earth_engine:
+    service_account_env: EE_SERVICE_ACCOUNT
+    key_file_env: EE_KEY_FILE
+    download_threads: 4
+  land_cover:
+    pixel_size_m: 10
+  openweathermap:
+    api_key_env: OWM_API_KEY
+    grid_degrees: 0.045
+    requests_per_minute: 60
+    max_retries: 4
+    retry_backoff_seconds: 2
+    manifest_update_interval: 25
+  heatwaves:
+    source_glob: D:/Work/WB/LDT/data/raw_data/*.nc
+    variable: tasmax
+    scenario: ssp585
+    threshold_c: 40
+    consecutive_days: 5
+    spatial_chunk_cells: 128
+    extraction_time_chunk_days: 365
+    processing_spatial_chunk_cells: 16
+    dask_workers: 2
+  internet:
+    # These are already-downloaded global Ookla datasets. No download/extraction
+    # step is performed; each country run spatially filters the shared files.
+    dataset_root: D:/Work/WB/LDT/countries/SRB/raw_data/internet
+    fixed_filename_template: "{year}_combined_fixed.parquet"
+    mobile_filename_template: "{year}_combined_mobile.parquet"
+  mapbox:
+    access_token_env: MAPBOX_ACCESS_TOKEN
+    walking_distance_meters: 10000
+    profile: walking
+    requests_per_minute: 60
+    max_workers: 4
+    max_retries: 4
+    retry_backoff_seconds: 2
+    manifest_update_interval: 25
+
+scoring:
+  # Preserve the notebook's panel-wide ranking. Set true only after approving
+  # a methodology change to rank municipalities separately within each year.
+  rank_within_year: false
+
+pipeline:
+  main_domains:
+    - flood
+    - land_cover
+    - luminosity
+    - air_pollution
+    - emissions
+    - heatwaves
+    - internet
+    - tourism
+  optional_domains:
+    - accessibility
+  # A completed task is reused only when its config, code, inputs, upstream
+  # manifests, and recorded artifacts are still current. Use --force to bypass.
+  resume_completed: true
+  # Missing expected rows are logged during publication; unexpected keys and
+  # duplicate keys always fail. Set true once every sparse domain is required
+  # to provide the complete municipality/year panel.
+  strict_output_coverage: false
+  max_parallel: 4
+  worker_threads: 1
+  resource_limits:
+    # At most two of Flood, Heatwaves, Internet, Land Cover, etc. may hold
+    # their large working sets at the same time.
+    heavy_memory: 2
+    disk_io: 2
+    earth_engine: 1
+    rate_limited_api: 1
+  task_resources:
+    domain.flood.extract: [earth_engine, disk_io]
+    domain.land_cover.extract: [earth_engine, disk_io]
+    domain.luminosity.extract: [earth_engine, disk_io]
+    domain.air_pollution.extract: [rate_limited_api, disk_io]
+    domain.heatwaves.extract: [heavy_memory, disk_io]
+    domain.flood.process: [heavy_memory, disk_io]
+    domain.land_cover.process: [heavy_memory, disk_io]
+    domain.air_pollution.process: [heavy_memory, disk_io]
+    domain.heatwaves.process: [heavy_memory, disk_io]
+    domain.internet.process: [heavy_memory, disk_io]
+    domain.tourism.process: [heavy_memory, disk_io]
+    domain.accessibility.extract: [rate_limited_api, disk_io]
+    domain.accessibility.process: [heavy_memory, disk_io]
