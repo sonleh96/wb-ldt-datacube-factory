@@ -356,8 +356,9 @@ non-numeric or non-finite published values, scores outside 0-100, invalid
 configured indicator ranges, inconsistent derived/composite values, or reversed
 score direction. Zero dominance, temporal sparsity, and robust outliers remain
 visible review findings because they can be legitimate for sparse or static
-sources. Publication replaces missing indicator and score values with zero
-before writing the final CSVs.
+sources. Publication replaces missing indicator values with zero before score
+construction, then zero-fills any remaining missing score values before
+writing the final CSVs.
 
 Publication rejects duplicate or unknown `(admin1, admin2, year)` keys. Missing
 expected keys are warnings by default and can be made fatal with
@@ -415,8 +416,9 @@ expected keys are warnings by default and can be made fatal with
 - Flood, Heatwaves, and Tourism are snapshots joined to `years.static_merge`.
   Transport and Accessibility are latest-value indicators repeated across all
   panel years.
-- Publication excludes internal provenance fields such as source/scenario
-  years, flood return period, and raw key-structure counts.
+- Publication excludes the internal fields `transport_source_year`,
+  `flood_scenario_year`, `flood_return_period_years`, and `key_structures` from
+  all three final output files.
 
 ## Testing
 
