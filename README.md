@@ -21,6 +21,7 @@ variables and are never stored in country configuration.
   fingerprints.
 - Structured JSONL logs for every task and action.
 - Final indicator and score tables keyed by `(admin1, admin2, year)`.
+- A release-blocking post-processing quality gate with reusable EDA artifacts.
 
 ## Data sources and domains
 
@@ -57,6 +58,9 @@ domain DAG: each extraction unlocks its own processing task
         |
         v
 combine indicators and scores
+        |
+        v
+publication EDA and quality gate
 ```
 
 Flood and Heatwaves depend on Transport. Internet depends on Key Assets.
@@ -92,6 +96,13 @@ ldt-factory --help
 
 The `geo` extra installs runtime geospatial dependencies. The `dev` extra adds
 pytest.
+
+For a non-editable environment setup, the equivalent complete dependency list
+is also available in `requirements.txt`:
+
+```powershell
+python -m pip install -r requirements.txt
+```
 
 ## Country configuration
 
@@ -230,6 +241,10 @@ ldt-factory run-domain --config $config --name flood --phase all --resume
 # Publication
 ldt-factory combine --config $config --resume
 ldt-factory combine --config $config --include-accessibility --resume
+
+# Post-processing EDA and release quality gate
+ldt-factory quality --config $config --resume
+ldt-factory quality --config $config --include-accessibility --resume
 ```
 
 Supported domain names are:
@@ -326,6 +341,30 @@ GPBP_LDT_{ISO3}_admin_2_regions.geojson
 GPBP_LDT_{ISO3}_admin_2.csv
 GPBP_LDT_{ISO3}_scores_admin_2.csv
 ```
+
+After publication, the quality workflow writes country-agnostic evidence under
+`<workspace>/quality/`:
+
+| Output | Contents |
+|---|---|
+| `report.html` | Human-readable QA summary, findings, profiles, and charts. |
+| `summary.json` | Machine-readable pass/warn/fail result and artifact inventory. |
+| `findings.csv` | Severity, blocking status, counts, rates, impact, and remediation. |
+| `indicator_profile.csv`, `score_profile.csv` | Completeness, zero rates, cardinality, and robust numeric summaries. |
+| `indicator_by_year.csv`, `score_by_year.csv` | Per-year completeness and distribution summaries. |
+| `indicator_outliers.csv` | Review samples outside the configured robust IQR fences. |
+| `composite_checks.csv` | Recalculation checks for Infrastructure, Livability, and Prosperity scores. |
+| `score_indicator_alignment.csv` | Rank-direction checks between each score and its source indicator. |
+
+The command exits unsuccessfully only for release-blocking defects: invalid or
+duplicate keys, incomplete panel grain, mismatched indicator/score keys,
+non-numeric or non-finite published values, scores outside 0-100, invalid
+configured indicator ranges, inconsistent derived/composite values, or reversed
+score direction. Missingness, zero dominance, temporal sparsity, and robust outliers
+remain visible review findings because they can be legitimate for sparse or
+static sources. In particular, the workflow distinguishes nulls from zeros and
+flags the notebook pattern where static missing values appear to have been
+filled with zero outside `years.static_merge`.
 
 Publication rejects duplicate or unknown `(admin1, admin2, year)` keys. Missing
 expected keys are warnings by default and can be made fatal with

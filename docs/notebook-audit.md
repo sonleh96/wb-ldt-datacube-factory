@@ -67,6 +67,9 @@ country factory without correcting hidden state and missing dependencies.
   fills all missing values with zero, and then ranks those zeros as observations.
   The modular pipeline keeps domain outputs separate; publication must validate
   expected key coverage before scoring.
+  The post-processing quality stage also reports missingness, zero dominance,
+  static-year zero-imputation patterns, and score-to-indicator rank direction so
+  this notebook behavior cannot pass unnoticed in a release review.
 - Administrative level 2 names alone are used as merge keys in several cells.
   They are not guaranteed unique within a country. The factory uses the
   `(admin1, admin2, year)` composite key.

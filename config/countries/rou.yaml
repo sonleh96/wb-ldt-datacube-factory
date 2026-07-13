@@ -98,6 +98,21 @@ scoring:
   # a methodology change to rank municipalities separately within each year.
   rank_within_year: false
 
+quality:
+  # Structural integrity, finite values, score bounds, indicator ranges,
+  # composite calculations, and score direction are release-blocking checks.
+  # Missingness, zero dominance, and robust outliers remain review findings.
+  missingness_warning_rate: 0.20
+  high_missingness_rate: 0.50
+  outlier_iqr_multiplier: 3.0
+  max_outlier_rows_per_column: 100
+  composite_tolerance: 0.02
+  derived_value_tolerance: 0.02
+  minimum_rank_correlation: 0.95
+  # Add country-specific physical or policy limits here. Built-in ranges cover
+  # non-negative measures and bounded accessibility/risk percentages.
+  indicator_ranges: {}
+
 pipeline:
   main_domains:
     - flood

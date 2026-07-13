@@ -9,7 +9,7 @@ from .earth_engine import configured_region, initialize
 
 
 def run(ctx: RunContext, logger: logging.Logger) -> None:
-        output = ctx.raw("flood", f"{ctx.config.iso3}_flood.tif")
+    output = ctx.raw("flood", f"{ctx.config.iso3}_flood.tif")
     if output.is_file():
         try:
             metadata = validate_numeric_raster(output)

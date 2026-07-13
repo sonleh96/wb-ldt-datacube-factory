@@ -164,6 +164,9 @@ def test_plan_exposes_stages_resources_and_dependencies(tmp_path):
     assert "domain.accessibility.extract" in domain_tasks
     assert domain_tasks["domain.flood.process"]["resources"]["heavy_memory"] == 1
     assert "domain.flood.extract" in domain_tasks["domain.flood.process"]["depends_on"]
+    quality_task = stages["quality"][0]
+    assert quality_task["task_id"] == "quality.publication.accessibility"
+    assert quality_task["depends_on"] == ["combine.indicators.accessibility"]
 
 
 def test_preflight_reports_credential_presence_without_value(tmp_path, monkeypatch):

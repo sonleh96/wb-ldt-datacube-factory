@@ -72,6 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
     domain.add_argument("--phase", choices=("extract", "process", "all"), default="all")
     combine = configured("combine", execution=True)
     combine.add_argument("--include-accessibility", action="store_true")
+    quality = configured("quality", execution=True)
+    quality.add_argument("--include-accessibility", action="store_true")
     run = configured("run", execution=True)
     run.add_argument("--include-optional", action="store_true")
     return parser
@@ -172,6 +174,10 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "combine":
         phase = "accessibility" if args.include_accessibility else "standard"
         run_unit(ctx, TaskKey("combine", "indicators", phase), logger)
+    elif args.command == "quality":
+        phase = "accessibility" if args.include_accessibility else "standard"
+        run_unit(ctx, TaskKey("quality", "publication", phase), logger)
+        print(ctx.config.workspace / "quality" / "report.html")
     return 0
 
 

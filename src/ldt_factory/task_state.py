@@ -80,6 +80,10 @@ _DEPENDENCIES: dict[tuple[str, str, str | None], tuple[TaskKey, ...]] = {
         TaskKey("domain", "accessibility", "extract"),
         TaskKey("prerequisite", "population"),
     ),
+    ("quality", "publication", "standard"): (TaskKey("combine", "indicators", "standard"),),
+    ("quality", "publication", "accessibility"): (
+        TaskKey("combine", "indicators", "accessibility"),
+    ),
 }
 
 
@@ -233,6 +237,15 @@ def _input_paths(config: FactoryConfig, task: TaskKey) -> list[Path]:
         for candidate in _iter_files(config.dataset_dir):
             if not candidate.name.startswith(f"GPBP_LDT_{config.iso3}_"):
                 paths.append(candidate)
+    elif task.kind == "quality":
+        paths.extend(
+            path
+            for path in (
+                config.dataset_dir / f"GPBP_LDT_{config.iso3}_admin_2.csv",
+                config.dataset_dir / f"GPBP_LDT_{config.iso3}_scores_admin_2.csv",
+            )
+            if path.is_file()
+        )
     return sorted(set(path.resolve() for path in paths if path.is_file()), key=str)
 
 
@@ -278,6 +291,12 @@ def _required_output_paths(config: FactoryConfig, task: TaskKey) -> list[Path]:
         return [
             config.dataset_dir / f"GPBP_LDT_{config.iso3}_admin_2.csv",
             config.dataset_dir / f"GPBP_LDT_{config.iso3}_scores_admin_2.csv",
+        ]
+    if task.kind == "quality":
+        return [
+            config.workspace / "quality" / "summary.json",
+            config.workspace / "quality" / "findings.csv",
+            config.workspace / "quality" / "report.html",
         ]
     return []
 
@@ -334,6 +353,8 @@ def _output_paths(config: FactoryConfig, task: TaskKey) -> list[Path]:
                 config.dataset_dir / f"GPBP_LDT_{config.iso3}_scores_admin_2.csv",
             ]
         )
+    elif task.kind == "quality":
+        paths.extend(_iter_files(config.workspace / "quality"))
     return sorted(set(path.resolve() for path in paths if path.is_file()), key=str)
 
 

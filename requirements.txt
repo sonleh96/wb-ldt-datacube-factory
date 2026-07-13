@@ -9,6 +9,7 @@ dask[array]>=2024.7
 earthengine-api>=0.1.417
 geemap>=0.35
 geopandas>=1.0
+matplotlib>=3.9
 netCDF4>=1.7
 numba>=0.60
 numpy>=2.0
