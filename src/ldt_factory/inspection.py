@@ -52,6 +52,7 @@ def _check(checks: list[dict[str, Any]], name: str, status: str, detail: str, **
 
 def _selected_domains(config: FactoryConfig, include_optional: bool) -> set[str]:
     domains = set(config.pipeline.get("main_domains", []))
+    domains.add("accessibility")
     if include_optional:
         domains.update(config.pipeline.get("optional_domains", []))
     return domains

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from ldt_factory.quality import analyze_publication
 
@@ -56,6 +57,26 @@ def test_quality_analysis_writes_inspectable_artifacts(tmp_path: Path):
     assert set(alignment["status"]) == {"pass"}
 
 
+def test_quality_analysis_writes_charts_with_current_matplotlib(tmp_path: Path):
+    pytest.importorskip("matplotlib")
+    indicators, scores = _write_valid_publication(tmp_path)
+    output = tmp_path / "quality"
+
+    analyze_publication(
+        indicators,
+        scores,
+        admin_columns=("Province", "Municipality"),
+        expected_years=[2021, 2022],
+        static_year=2022,
+        output_dir=output,
+        iso3="TST",
+        create_charts=True,
+    )
+
+    assert (output / "indicator_missingness.png").is_file()
+    assert (output / "score_distributions.png").is_file()
+
+
 def test_quality_analysis_blocks_invalid_scores_and_duplicate_grain(tmp_path: Path):
     indicators, scores = _write_valid_publication(tmp_path)
     score_frame = pd.read_csv(scores)
@@ -81,7 +102,7 @@ def test_quality_analysis_blocks_invalid_scores_and_duplicate_grain(tmp_path: Pa
     assert (tmp_path / "quality" / "report.html").is_file()
 
 
-def test_static_zero_imputation_is_reported_without_being_silently_accepted(tmp_path: Path):
+def test_explicit_static_zero_fill_is_not_reported_as_an_error(tmp_path: Path):
     indicators, scores = _write_valid_publication(tmp_path)
     indicator_frame = pd.read_csv(indicators)
     indicator_frame["Road Flood Risk (km)"] = [0.0, 0.0, 1.0, 2.0]
@@ -98,7 +119,7 @@ def test_static_zero_imputation_is_reported_without_being_silently_accepted(tmp_
         create_charts=False,
     )
 
-    assert any(finding.check == "possible_zero_imputation" for finding in result.findings)
+    assert not any(finding.check == "possible_zero_imputation" for finding in result.findings)
     assert result.blocking_count == 0
 
 

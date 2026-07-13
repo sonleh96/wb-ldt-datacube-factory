@@ -40,7 +40,7 @@ variables and are never stored in country configuration.
 | Heatwaves | Local climate-projection NetCDF files | Clips the full configured projection set and calculates transport exposure to qualifying events. |
 | Internet | Existing global Ookla Parquet files | Filters fixed and mobile tiles locally; it does not download Ookla data. |
 | Tourism | OSM POIs, buildings, land use, and transport | Counts configured tourism-related features by admin-2. |
-| Accessibility | Mapbox Isochrone API and WorldPop | Optional cached extraction and population-weighted school/hospital accessibility. |
+| Accessibility | Mapbox Isochrone API and WorldPop | Required cached extraction and population-weighted school/hospital accessibility. |
 
 ## Pipeline order
 
@@ -78,7 +78,7 @@ heavy-memory, disk-heavy, Earth Engine, and rate-limited API tasks.
 - An Earth Engine service account and JSON key for Flood, Land Cover, and
   Luminosity extraction.
 - An OpenWeatherMap API key for Air Pollution.
-- A Mapbox token only when optional Accessibility is enabled.
+- A Mapbox token for required Accessibility extraction.
 - Local heatwave NetCDF inputs matching `sources.heatwaves.source_glob`.
 - Existing global Ookla fixed/mobile Parquet files for every indicator year.
 
@@ -121,7 +121,9 @@ Before using a configuration for another country, update at least:
 - Domain and resource settings appropriate for the machine.
 
 `years.static_merge` is the dataframe join year for static snapshots. It is not
-the Flood scenario year or Transport source year.
+the Flood scenario year or Transport source year. The latest Transport and
+Accessibility values are broadcast across every indicator year during
+publication.
 
 Do not put credential values in the country YAML. Source sections contain only
 the names of environment variables that the factory should read.
@@ -162,7 +164,8 @@ ldt-factory preflight --config $config
   work. Add `--json` for machine-readable output.
 - `preflight` checks packages, boundaries, credential presence, local Heatwave
   and Ookla inputs, free disk space, existing Land Cover rasters, and the Air
-  Pollution request estimate. Add `--include-optional` to check Accessibility.
+  Pollution request estimate. It always checks the Mapbox credential required
+  by Accessibility.
 
 `run` does not invoke preflight automatically. Resolve preflight errors before
 starting; warnings are reported for operator review but do not block execution.
@@ -178,17 +181,9 @@ ldt-factory run `
   --resume
 ```
 
-Add `--include-optional` to execute Accessibility and include it in publication:
-
-```powershell
-$config = "config/countries/<iso3>.yaml"
-$runId = "<iso3>-production-001-accessibility"
-ldt-factory run `
-  --config $config `
-  --run-id $runId `
-  --resume `
-  --include-optional
-```
+Accessibility is part of every full run and every publication output.
+`--include-optional` remains available for any additional domains that a future
+country configuration explicitly lists under `pipeline.optional_domains`.
 
 A full run holds a workspace lock so a second orchestrator cannot overwrite the
 same canonical outputs. The scheduler still launches eligible tasks in parallel
@@ -237,14 +232,13 @@ ldt-factory prepare-boundaries --config $config --resume
 ldt-factory run-domain --config $config --name flood --phase extract --resume
 ldt-factory run-domain --config $config --name flood --phase process --resume
 ldt-factory run-domain --config $config --name flood --phase all --resume
+ldt-factory run-domain --config $config --name accessibility --phase all --resume
 
 # Publication
 ldt-factory combine --config $config --resume
-ldt-factory combine --config $config --include-accessibility --resume
 
 # Post-processing EDA and release quality gate
 ldt-factory quality --config $config --resume
-ldt-factory quality --config $config --include-accessibility --resume
 ```
 
 Supported domain names are:
@@ -324,7 +318,7 @@ Domain outputs under `datasets/` are:
 | `{ISO3}_emissions.csv` | CO2e and CH4 emissions. |
 | `{ISO3}_air_pollution.csv` | PM2.5, PM10, and NO2 concentrations. |
 | `tourism.csv` | Tourism feature counts. |
-| `{ISO3}_accessibility.csv` | Optional school/hospital accessibility. |
+| `{ISO3}_accessibility.csv` | Required school/hospital accessibility. |
 
 Reusable spatial outputs under `shapefiles/` are:
 
@@ -360,11 +354,10 @@ The command exits unsuccessfully only for release-blocking defects: invalid or
 duplicate keys, incomplete panel grain, mismatched indicator/score keys,
 non-numeric or non-finite published values, scores outside 0-100, invalid
 configured indicator ranges, inconsistent derived/composite values, or reversed
-score direction. Missingness, zero dominance, temporal sparsity, and robust outliers
-remain visible review findings because they can be legitimate for sparse or
-static sources. In particular, the workflow distinguishes nulls from zeros and
-flags the notebook pattern where static missing values appear to have been
-filled with zero outside `years.static_merge`.
+score direction. Zero dominance, temporal sparsity, and robust outliers remain
+visible review findings because they can be legitimate for sparse or static
+sources. Publication replaces missing indicator and score values with zero
+before writing the final CSVs.
 
 Publication rejects duplicate or unknown `(admin1, admin2, year)` keys. Missing
 expected keys are warnings by default and can be made fatal with
@@ -400,7 +393,9 @@ expected keys are warnings by default and can be made fatal with
 
 - Indicator years, the Land Cover baseline, Transport observation year, and
   static publication year are defined independently in each country YAML.
-- `years.static_merge` is only the join key for static domain outputs.
+- `years.static_merge` is the join key for snapshot domain outputs. Transport
+  and Accessibility use their latest available values across every indicator
+  year.
 - Flood currently uses the factory's code-defined WRI Aqueduct scenario. Review
   the Flood extraction module before changing climate scenario, return period,
   model, or hazard year.
@@ -417,9 +412,11 @@ expected keys are warnings by default and can be made fatal with
   class `0` is water. They must be re-extracted with nodata `255`.
 - Scores rank across the complete panel by default. Setting
   `scoring.rank_within_year: true` is a methodology change.
-- Flood, Heatwaves, Transport, Tourism, and optional Accessibility are static
-  snapshots joined only to `years.static_merge`; they are not annual time
-  series merely because the publication table contains multiple panel years.
+- Flood, Heatwaves, and Tourism are snapshots joined to `years.static_merge`.
+  Transport and Accessibility are latest-value indicators repeated across all
+  panel years.
+- Publication excludes internal provenance fields such as source/scenario
+  years, flood return period, and raw key-structure counts.
 
 ## Testing
 

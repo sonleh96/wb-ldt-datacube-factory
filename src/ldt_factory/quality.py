@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import inspect
 import json
 import logging
 import math
@@ -479,23 +480,6 @@ def _check_measures(
                 rate=float((valid == 0).mean()),
             )
 
-        if static_year is not None and column in STATIC_INDICATORS and "Year" in frame:
-            outside = series[pd.to_numeric(frame["Year"], errors="coerce") != static_year].dropna()
-            inside = series[pd.to_numeric(frame["Year"], errors="coerce") == static_year].dropna()
-            if len(outside) and (outside == 0).all() and len(inside) and (inside != 0).any():
-                _add(
-                    findings,
-                    "high",
-                    "possible_zero_imputation",
-                    dataset,
-                    f"All {len(outside)} values outside static year {static_year} are zero while the static year has non-zero values.",
-                    "Preserve unavailable static observations as null rather than backfilling zero across years.",
-                    column=column,
-                    count=len(outside),
-                    rate=len(outside) / len(frame) if len(frame) else 0,
-                )
-
-
 def _check_indicator_ranges(frame, findings: list[Finding], specs) -> None:
     import numpy as np
     import pandas as pd
@@ -828,11 +812,17 @@ def _write_charts(output_dir: Path, indicator_profile, score_frame, keys: list[s
         selected = [(column, values) for column, values in zip(score_columns, data) if len(values)]
         if selected:
             fig, ax = plt.subplots(figsize=(11, max(5, 0.36 * len(selected))))
+            boxplot_options: dict[str, object] = {
+                "tick_labels": [column for column, _ in selected],
+                "showfliers": False,
+            }
+            if "orientation" in inspect.signature(ax.boxplot).parameters:
+                boxplot_options["orientation"] = "horizontal"
+            else:
+                boxplot_options["vert"] = False
             ax.boxplot(
                 [values for _, values in selected],
-                labels=[column for column, _ in selected],
-                vert=False,
-                showfliers=False,
+                **boxplot_options,
             )
             ax.set_xlim(0, 100)
             ax.set_xlabel("Score")

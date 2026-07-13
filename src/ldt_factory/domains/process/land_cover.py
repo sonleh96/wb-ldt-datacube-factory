@@ -27,15 +27,24 @@ DYNAMIC_WORLD_CLASSES = {
     7: "bare",
     8: "snow_and_ice",
 }
+ADMIN_AREA_COLUMN = "admin_area_km2"
 
 
-def derive_indicators(class_counts, admin1: str, admin2: str, baseline_year: int, output_years: list[int], pixel_size_m: float):
-    """Reproduce the notebook's class-share changes and crop area calculation."""
+def derive_indicators(
+    class_counts,
+    admin1: str,
+    admin2: str,
+    baseline_year: int,
+    output_years: list[int],
+):
+    """Derive class-share changes and area-weighted agricultural land."""
     import numpy as np
     import pandas as pd
 
     frame = class_counts.copy()
     class_columns = list(DYNAMIC_WORLD_CLASSES.values())
+    if ADMIN_AREA_COLUMN not in frame:
+        raise ValueError(f"Land-cover class counts are missing {ADMIN_AREA_COLUMN!r}")
     frame[class_columns] = frame[class_columns].fillna(0)
 
     # The notebook currently uses mean(axis=1). Sum is the intended denominator
@@ -64,7 +73,15 @@ def derive_indicators(class_counts, admin1: str, admin2: str, baseline_year: int
         100.0 * (output["tree_pct"] - output["tree_pct_baseline"]) / output["tree_pct_baseline"],
         np.nan,
     )
-    output["agri_land"] = output["crops"] * (pixel_size_m**2 / 1_000_000.0)
+    # The extracted rasters use EPSG:4326, whose pixel area varies by latitude.
+    # Applying a nominal 10 x 10 metre area to every pixel overstates land area.
+    # Use the categorical crop share and the municipality's equal-area geometry
+    # so agricultural area remains physically consistent with total land area.
+    output["agri_land"] = np.where(
+        output["total"] > 0,
+        output["crops"] / output["total"] * output[ADMIN_AREA_COLUMN],
+        np.nan,
+    )
     return output[[admin1, admin2, "year", "built_pct_change", "tree_pct_change", "agri_land"]]
 
 
@@ -76,7 +93,6 @@ def run(ctx: RunContext, logger: logging.Logger) -> None:
     years = ctx.config.years("land_cover")
     output_years = ctx.config.years("indicators")
     baseline_year = years[0]
-    pixel_size_m = float(ctx.config.source("land_cover").get("pixel_size_m", 10))
     rows = []
     state_dir = ctx.config.workspace / "state" / "land_cover"
     boundary_signature = path_signature(
@@ -134,13 +150,26 @@ def run(ctx: RunContext, logger: logging.Logger) -> None:
             rows.append(frame)
 
         class_counts = pd.concat(rows, ignore_index=True)
+        area_lookup = admin2[[ctx.config.admin1, ctx.config.admin2]].copy()
+        area_lookup[ADMIN_AREA_COLUMN] = (
+            admin2.to_crs("EPSG:6933").geometry.area / 1_000_000.0
+        )
+        if (area_lookup[ADMIN_AREA_COLUMN] <= 0).any():
+            raise ValueError("Admin-2 boundary contains a non-positive land area")
+        class_counts = class_counts.merge(
+            area_lookup,
+            on=[ctx.config.admin1, ctx.config.admin2],
+            how="left",
+            validate="many_to_one",
+        )
+        if class_counts[ADMIN_AREA_COLUMN].isna().any():
+            raise ValueError("Land-cover class counts could not be matched to every admin-2 area")
         output = derive_indicators(
             class_counts,
             ctx.config.admin1,
             ctx.config.admin2,
             baseline_year,
             output_years,
-            pixel_size_m,
         )
         write_frame_csv_atomic(output, ctx.output("lulc.csv"))
         logger.info("land-cover rows=%d", len(output), extra={"domain": "land_cover"})

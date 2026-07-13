@@ -71,9 +71,17 @@ def build_parser() -> argparse.ArgumentParser:
     domain.add_argument("--name", choices=DOMAINS, required=True)
     domain.add_argument("--phase", choices=("extract", "process", "all"), default="all")
     combine = configured("combine", execution=True)
-    combine.add_argument("--include-accessibility", action="store_true")
+    combine.add_argument(
+        "--include-accessibility",
+        action="store_true",
+        help="deprecated compatibility flag; Accessibility is always included",
+    )
     quality = configured("quality", execution=True)
-    quality.add_argument("--include-accessibility", action="store_true")
+    quality.add_argument(
+        "--include-accessibility",
+        action="store_true",
+        help="deprecated compatibility flag; Accessibility is always included",
+    )
     run = configured("run", execution=True)
     run.add_argument("--include-optional", action="store_true")
     return parser
@@ -172,11 +180,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "run-domain":
         run_domain(ctx, args.name, args.phase, logger, resume=ctx.resume, force=ctx.force)
     elif args.command == "combine":
-        phase = "accessibility" if args.include_accessibility else "standard"
-        run_unit(ctx, TaskKey("combine", "indicators", phase), logger)
+        run_unit(ctx, TaskKey("combine", "indicators", "accessibility"), logger)
     elif args.command == "quality":
-        phase = "accessibility" if args.include_accessibility else "standard"
-        run_unit(ctx, TaskKey("quality", "publication", phase), logger)
+        run_unit(ctx, TaskKey("quality", "publication", "accessibility"), logger)
         print(ctx.config.workspace / "quality" / "report.html")
     return 0
 

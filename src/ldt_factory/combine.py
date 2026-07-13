@@ -45,6 +45,15 @@ OUTPUT_SPECS = {
     "accessibility": ("{iso3}_accessibility.csv", "static"),
 }
 
+LATEST_VALUE_DOMAINS = {"transport", "accessibility"}
+
+UNPUBLISHED_COLUMNS = {
+    "transport_source_year",
+    "flood_scenario_year",
+    "flood_return_period_years",
+    "key_structures",
+}
+
 
 def _safe_ratio(numerator, denominator, multiplier=1.0):
     import numpy as np
@@ -87,9 +96,21 @@ def _validate_keys(
         )
 
 
-def run(ctx: RunContext, logger: logging.Logger, *, include_accessibility: bool = False) -> tuple[Path, Path]:
+def run(
+    ctx: RunContext,
+    logger: logging.Logger,
+    *,
+    include_accessibility: bool = True,
+) -> tuple[Path, Path]:
+    """Build required publication outputs.
+
+    ``include_accessibility`` remains for API compatibility, but Accessibility
+    is always required and included.
+    """
     import numpy as np
     import pandas as pd
+
+    del include_accessibility
 
     cfg = ctx.config
     admin2 = load_admin2(cfg)
@@ -101,7 +122,7 @@ def run(ctx: RunContext, logger: logging.Logger, *, include_accessibility: bool 
 
     configured_domains = list(dict.fromkeys(cfg.pipeline.get("main_domains", [])))
     publication_units = ["population", "transport", *configured_domains]
-    if include_accessibility:
+    if "accessibility" not in publication_units:
         publication_units.append("accessibility")
     publication_units = list(dict.fromkeys(publication_units))
     unsupported = [name for name in publication_units if name not in OUTPUT_SPECS]
@@ -133,12 +154,33 @@ def run(ctx: RunContext, logger: logging.Logger, *, include_accessibility: bool 
                 strict_coverage=strict_coverage,
                 logger=logger,
             )
-            drop_overlap = [column for column in frame.columns if column in combined.columns and column not in keys]
+            if name in LATEST_VALUE_DOMAINS:
+                merge_keys = [cfg.admin1, cfg.admin2]
+                frame_to_merge = (
+                    frame.sort_values("year")
+                    .drop_duplicates(merge_keys, keep="last")
+                    .drop(columns="year")
+                )
+                merge_validation = "many_to_one"
+            else:
+                merge_keys = keys
+                frame_to_merge = frame
+                merge_validation = "one_to_one"
+            drop_overlap = [
+                column
+                for column in frame_to_merge.columns
+                if column in combined.columns and column not in merge_keys
+            ]
             if drop_overlap:
                 raise ValueError(
                     f"{path} overlaps previously published columns: {sorted(drop_overlap)}"
                 )
-            combined = combined.merge(frame, on=keys, how="left", validate="one_to_one")
+            combined = combined.merge(
+                frame_to_merge,
+                on=merge_keys,
+                how="left",
+                validate=merge_validation,
+            )
             logger.info(
                 "publication input merged domain=%s rows=%d columns=%d",
                 name,
@@ -146,7 +188,7 @@ def run(ctx: RunContext, logger: logging.Logger, *, include_accessibility: bool 
                 len(frame.columns),
                 extra={"action": "merge_domain", "domain": "publication", "phase": name, "path": str(path)},
             )
-
+        combined = combined.drop(columns=sorted(UNPUBLISHED_COLUMNS), errors="ignore")
         combined = combined.rename(columns=KEY_RENAMES)
         derived_ratios = {
             "Luminosity per Capita": ("Nighttime Luminosity", "Population", 1),
@@ -163,8 +205,11 @@ def run(ctx: RunContext, logger: logging.Logger, *, include_accessibility: bool 
                     combined[numerator], combined[denominator], multiplier
                 )
         combined = combined.replace([np.inf, -np.inf], np.nan).rename(columns={"year": "Year"})
+        indicator_keys = [cfg.admin1, cfg.admin2, "Year"]
+        indicator_values = [column for column in combined.columns if column not in indicator_keys]
+        combined[indicator_values] = combined[indicator_values].fillna(0)
 
-        score = combined[[cfg.admin1, cfg.admin2, "Year"]].copy()
+        score = combined[indicator_keys].copy()
         specifications = {
             "Broadband Internet Score": ("Average Broadband Internet Download Speed (Mbps)", True),
             "Mobile Internet Score": ("Average Mobile Internet Download Speed (Mbps)", True),
@@ -183,13 +228,12 @@ def run(ctx: RunContext, logger: logging.Logger, *, include_accessibility: bool 
             "Tourism Score": ("Number of Tourism POIs", True),
             "Agricultural Land Score": ("Total Land Area for Agricultural Use (km2)", True),
         }
-        if include_accessibility:
-            specifications.update(
-                {
-                    "Accessibility to Hospitals Score": ("Accessibility to Hospitals (%)", True),
-                    "Accessibility to Schools Score": ("Accessibility to Schools (%)", True),
-                }
-            )
+        specifications.update(
+            {
+                "Accessibility to Hospitals Score": ("Accessibility to Hospitals (%)", True),
+                "Accessibility to Schools Score": ("Accessibility to Schools (%)", True),
+            }
+        )
         specifications = {
             score_name: settings
             for score_name, settings in specifications.items()
@@ -219,6 +263,8 @@ def run(ctx: RunContext, logger: logging.Logger, *, include_accessibility: bool 
             score["Livability Score"] = score[livability].mean(axis=1, skipna=True)
         if prosperity:
             score["Prosperity Score"] = score[prosperity].mean(axis=1, skipna=True)
+        score_values = [column for column in score.columns if column not in indicator_keys]
+        score[score_values] = score[score_values].fillna(0)
         numeric = score.select_dtypes(include="number").columns
         score[numeric] = score[numeric].round(2)
 

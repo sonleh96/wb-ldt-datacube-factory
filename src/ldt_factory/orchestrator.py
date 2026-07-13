@@ -48,7 +48,7 @@ def _run_operation(ctx: RunContext, task: TaskKey, logger: logging.Logger) -> li
     elif task.kind == "boundary":
         operation = lambda: write_normalized_boundaries(ctx.config)
     elif task.kind == "combine":
-        operation = lambda: combine_run(ctx, logger, include_accessibility=task.phase == "accessibility")
+        operation = lambda: combine_run(ctx, logger)
     elif task.kind == "quality":
         operation = lambda: quality_run(ctx, logger)
     else:
@@ -78,6 +78,8 @@ def build_pipeline_stages(
 ) -> list[tuple[str, list[TaskKey]]]:
     pipeline = config.pipeline
     domains = list(dict.fromkeys(pipeline.get("main_domains", [])))
+    if "accessibility" not in domains:
+        domains.append("accessibility")
     if include_optional:
         domains.extend(name for name in pipeline.get("optional_domains", []) if name not in domains)
     return [
@@ -93,11 +95,11 @@ def build_pipeline_stages(
         ),
         (
             "combine",
-            [TaskKey("combine", "indicators", "accessibility" if include_optional else "standard")],
+            [TaskKey("combine", "indicators", "accessibility")],
         ),
         (
             "quality",
-            [TaskKey("quality", "publication", "accessibility" if include_optional else "standard")],
+            [TaskKey("quality", "publication", "accessibility")],
         ),
     ]
 

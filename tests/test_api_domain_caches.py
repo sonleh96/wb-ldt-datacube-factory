@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -51,6 +53,7 @@ def _context(tmp_path: Path, *, indicators: list[int] | None = None) -> RunConte
                 "api_key_env": "TEST_OWM_KEY",
                 "grid_degrees": 1.0,
                 "requests_per_minute": 60000,
+                "max_workers": 2,
             },
             "mapbox": {
                 "access_token_env": "TEST_MAPBOX_TOKEN",
@@ -178,6 +181,71 @@ def test_air_extraction_resumes_complete_cache_without_api_key(
     )
     assert manifest["status"] == "complete"
     assert manifest["completed_cells"] == 1
+
+
+def test_air_cache_rejects_coordinates_from_a_different_grid(tmp_path: Path) -> None:
+    path = tmp_path / "0.json"
+    atomic_write_json(
+        path,
+        air_extract.summarize_payload(
+            {"list": []},
+            grid_id=0,
+            requested_year=2021,
+            lon=0.5,
+            lat=0.5,
+        ),
+    )
+
+    assert not air_extract._valid_summary(
+        path,
+        grid_id=0,
+        year=2021,
+        lon=1.5,
+        lat=0.5,
+    )
+
+
+def test_air_extraction_uses_two_workers_with_one_shared_pacer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _context(tmp_path)
+    admin0 = gpd.GeoDataFrame(
+        {"name": ["country"]},
+        geometry=[box(0, 0, 2, 1)],
+        crs="EPSG:4326",
+    )
+    monkeypatch.setattr(air_extract, "load_admin0", lambda config: admin0)
+    monkeypatch.setenv("TEST_OWM_KEY", "test-key")
+    lock = threading.Lock()
+    barrier = threading.Barrier(2)
+    active = 0
+    peak_active = 0
+    session_ids: set[int] = set()
+    pacer_ids: set[int] = set()
+
+    def fake_request(session, url, *, params, pacer, **kwargs):
+        nonlocal active, peak_active
+        with lock:
+            active += 1
+            peak_active = max(peak_active, active)
+            session_ids.add(id(session))
+            pacer_ids.add(id(pacer))
+        try:
+            barrier.wait(timeout=2)
+            time.sleep(0.01)
+            return {"list": []}
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(air_extract, "request_json_with_retry", fake_request)
+
+    air_extract.run(ctx, _logger())
+
+    assert peak_active == 2
+    assert len(session_ids) == 2
+    assert len(pacer_ids) == 1
+    assert len(list(ctx.raw("air_pollution", "annual", "2021").glob("[0-9]*.json"))) == 2
 
 
 def test_accessibility_cached_extraction_and_processing_are_offline(

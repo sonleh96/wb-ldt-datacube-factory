@@ -62,8 +62,9 @@ sources:
     pixel_size_m: 10
   openweathermap:
     api_key_env: OWM_API_KEY
-    grid_degrees: 0.045
+    grid_degrees: 0.09
     requests_per_minute: 60
+    max_workers: 2
     max_retries: 4
     retry_backoff_seconds: 2
     manifest_update_interval: 25
@@ -123,7 +124,6 @@ pipeline:
     - heatwaves
     - internet
     - tourism
-  optional_domains:
     - accessibility
   # A completed task is reused only when its config, code, inputs, upstream
   # manifests, and recorded artifacts are still current. Use --force to bypass.
