@@ -21,6 +21,7 @@ def test_land_cover_matches_notebook_intent():
                 "built": built,
                 "bare": 5 if year == 2017 else 0,
                 "snow_and_ice": 0,
+                "admin_area_km2": 0.01,
             }
         )
 
@@ -30,10 +31,10 @@ def test_land_cover_matches_notebook_intent():
         "Municipality",
         baseline_year=2017,
         output_years=[2021],
-        pixel_size_m=10,
     )
 
     assert output["year"].tolist() == [2021]
     assert output.loc[0, "built_pct_change"] == pytest.approx(100.0)
     assert output.loc[0, "tree_pct_change"] == pytest.approx(-25.0)
     assert output.loc[0, "agri_land"] == pytest.approx(0.0025)
+    assert output.loc[0, "agri_land"] <= 0.01

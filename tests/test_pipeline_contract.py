@@ -15,4 +15,5 @@ def test_requested_stage_contract():
         "heatwaves",
         "internet",
         "tourism",
+        "accessibility",
     }.issubset(DOMAINS)

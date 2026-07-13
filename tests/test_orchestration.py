@@ -153,17 +153,31 @@ def test_plan_exposes_stages_resources_and_dependencies(tmp_path):
         tmp_path,
         {
             "main_domains": ["flood", "tourism"],
-            "optional_domains": ["accessibility"],
             "max_parallel": 3,
         },
     )
-    payload = build_plan(config, include_optional=True)
+    payload = build_plan(config)
     stages = {stage["name"]: stage["tasks"] for stage in payload["stages"]}
     domain_tasks = {task["task_id"]: task for task in stages["domains"]}
     assert payload["max_parallel"] == 3
     assert "domain.accessibility.extract" in domain_tasks
     assert domain_tasks["domain.flood.process"]["resources"]["heavy_memory"] == 1
     assert "domain.flood.extract" in domain_tasks["domain.flood.process"]["depends_on"]
+    quality_task = stages["quality"][0]
+    assert quality_task["task_id"] == "quality.publication.accessibility"
+    assert quality_task["depends_on"] == ["combine.indicators.accessibility"]
+
+
+def test_accessibility_is_required_even_when_country_config_omits_it(tmp_path):
+    config = _config(tmp_path, {"main_domains": ["flood"]})
+
+    payload = build_plan(config)
+    stages = {stage["name"]: stage["tasks"] for stage in payload["stages"]}
+    task_ids = {task["task_id"] for task in stages["domains"]}
+
+    assert "domain.accessibility.extract" in task_ids
+    assert "domain.accessibility.process" in task_ids
+    assert stages["combine"][0]["task_id"] == "combine.indicators.accessibility"
 
 
 def test_preflight_reports_credential_presence_without_value(tmp_path, monkeypatch):
@@ -182,6 +196,7 @@ def test_preflight_reports_credential_presence_without_value(tmp_path, monkeypat
     assert "TEST_OWM_KEY" in serialized
     assert "do-not-print-this-secret" not in serialized
     assert any(check["name"] == "OpenWeatherMap API key" and check["status"] == "ok" for check in payload["checks"])
+    assert any(check["name"] == "Mapbox access token" for check in payload["checks"])
 
 
 def test_status_loads_latest_run_and_live_task_state(tmp_path):

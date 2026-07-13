@@ -16,6 +16,7 @@ from .geo import write_normalized_boundaries
 from .logging_utils import configure_logging
 from .locks import workspace_lock
 from .prerequisites import PREREQUISITES, run as run_prerequisite
+from .quality import run as quality_run
 from .resources import ResourcePolicy
 from .task_state import RunState, TaskKey, TaskResult, TaskStateStore, redact_sensitive
 from .web import WEB_SOURCES, run as run_web
@@ -47,7 +48,9 @@ def _run_operation(ctx: RunContext, task: TaskKey, logger: logging.Logger) -> li
     elif task.kind == "boundary":
         operation = lambda: write_normalized_boundaries(ctx.config)
     elif task.kind == "combine":
-        operation = lambda: combine_run(ctx, logger, include_accessibility=task.phase == "accessibility")
+        operation = lambda: combine_run(ctx, logger)
+    elif task.kind == "quality":
+        operation = lambda: quality_run(ctx, logger)
     else:
         raise ValueError(f"Unknown task kind: {task.kind}")
 
@@ -75,6 +78,8 @@ def build_pipeline_stages(
 ) -> list[tuple[str, list[TaskKey]]]:
     pipeline = config.pipeline
     domains = list(dict.fromkeys(pipeline.get("main_domains", [])))
+    if "accessibility" not in domains:
+        domains.append("accessibility")
     if include_optional:
         domains.extend(name for name in pipeline.get("optional_domains", []) if name not in domains)
     return [
@@ -90,7 +95,11 @@ def build_pipeline_stages(
         ),
         (
             "combine",
-            [TaskKey("combine", "indicators", "accessibility" if include_optional else "standard")],
+            [TaskKey("combine", "indicators", "accessibility")],
+        ),
+        (
+            "quality",
+            [TaskKey("quality", "publication", "accessibility")],
         ),
     ]
 
@@ -386,6 +395,7 @@ def _run_pipeline_unlocked(
     prerequisite_tasks = stages["prerequisites"]
     domain_tasks = stages["domains"]
     combine_task = stages["combine"][0]
+    quality_task = stages["quality"][0]
     requested = [task for stage_tasks in stages.values() for task in stage_tasks]
     run_state = RunState(config, run_id)
     task_store = TaskStateStore(config)
@@ -438,6 +448,8 @@ def _run_pipeline_unlocked(
             force=force,
         )
         for result in _run_operation(ctx, combine_task, logger):
+            run_state.record(result)
+        for result in _run_operation(ctx, quality_task, logger):
             run_state.record(result)
     except KeyboardInterrupt:
         _capture_terminal_manifests(run_state, task_store, requested, run_id)
