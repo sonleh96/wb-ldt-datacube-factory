@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 
 from ...context import RunContext
+from ...drive_sources import load_verified_drive_inventory
 from ...geo import load_admin0
 from ...logging_utils import logged_action
 from ...raster_utils import atomic_output_path
@@ -46,9 +47,14 @@ def run(ctx: RunContext, logger: logging.Logger) -> None:
     import xarray as xr
 
     source = ctx.config.source("heatwaves")
-    paths = [Path(item) for item in sorted(glob.glob(str(source["source_glob"])))]
+    if source.get("provider") == "google_drive":
+        paths = load_verified_drive_inventory(ctx.config, "heatwaves")
+    else:
+        paths = [Path(item) for item in sorted(glob.glob(str(source["source_glob"])))]
     if not paths:
-        raise FileNotFoundError(f"No heatwave netCDFs match {source['source_glob']}")
+        raise FileNotFoundError(
+            f"No heatwave netCDFs available from {source.get('source_glob', 'Drive inventory')}"
+        )
     admin0 = load_admin0(ctx.config)
     boundary = admin0.to_crs("EPSG:4326")
     minx, miny, maxx, maxy = boundary.total_bounds

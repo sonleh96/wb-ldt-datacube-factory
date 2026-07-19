@@ -3,6 +3,7 @@
 
 PyYAML>=6.0
 requests>=2.31
+google-auth>=2.35
 
 # Geospatial and scientific runtime
 dask[array]>=2024.7

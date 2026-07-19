@@ -8,6 +8,7 @@ import sys
 from .config import load_config
 from .context import RunContext
 from .domain_runner import DOMAINS, run_domain
+from .drive_sources import DRIVE_SOURCE_NAMES
 from .inspection import build_plan, load_status, run_preflight
 from .logging_utils import configure_logging
 from .orchestrator import run_pipeline, run_unit
@@ -65,6 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
     configured("prepare-boundaries", execution=True)
     web = configured("run-web", execution=True)
     web.add_argument("--source", choices=WEB_SOURCES, required=True)
+    source = configured("sync-source")
+    source.add_argument("--name", choices=DRIVE_SOURCE_NAMES, required=True)
     prereq = configured("run-prerequisite", execution=True)
     prereq.add_argument("--name", choices=PREREQUISITES, required=True)
     domain = configured("run-domain", execution=True)
@@ -175,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
         print(ctx.config.dataset_dir / f"GPBP_LDT_{ctx.config.iso3}_admin_2_regions.geojson")
     elif args.command == "run-web":
         run_unit(ctx, TaskKey("web", args.source), logger)
+    elif args.command == "sync-source":
+        run_unit(ctx, TaskKey("source", args.name, "sync"), logger)
     elif args.command == "run-prerequisite":
         run_unit(ctx, TaskKey("prerequisite", args.name), logger)
     elif args.command == "run-domain":

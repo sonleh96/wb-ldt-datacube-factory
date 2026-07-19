@@ -51,3 +51,39 @@ def test_load_config_rejects_non_iso3(tmp_path):
     data["country"]["iso3"] = "Romania"
     with pytest.raises(ConfigError, match="ISO-3"):
         load_config(_write(tmp_path, data))
+
+
+def test_load_config_rejects_unknown_land_cover_backend(tmp_path):
+    data = _base(tmp_path)
+    data["sources"] = {"land_cover": {"backend": "unknown"}}
+    with pytest.raises(ConfigError, match="land_cover.backend must be one of"):
+        load_config(_write(tmp_path, data))
+
+
+def test_reduce_regions_backend_requires_earth_engine_asset_and_project(tmp_path):
+    data = _base(tmp_path)
+    data["sources"] = {"land_cover": {"backend": "gee_reduce_regions"}}
+    with pytest.raises(ConfigError, match="admin2_asset_id"):
+        load_config(_write(tmp_path, data))
+
+
+def test_reduce_regions_backend_configuration_is_accepted(tmp_path):
+    data = _base(tmp_path)
+    data["sources"] = {
+        "earth_engine": {
+            "project_id": "test-project",
+            "admin2_asset_id": "projects/test-project/assets/rou_admin2",
+        },
+        "land_cover": {
+            "backend": "gee_reduce_regions",
+            "pixel_size_m": 10,
+            "tile_scale": 4,
+            "max_pixels_per_region": 1_000_000,
+            "poll_seconds": 1,
+            "cleanup_intermediate_assets": False,
+        },
+    }
+
+    config = load_config(_write(tmp_path, data))
+
+    assert config.source("land_cover")["backend"] == "gee_reduce_regions"

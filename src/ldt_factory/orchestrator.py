@@ -12,6 +12,7 @@ from .combine import run as combine_run
 from .config import FactoryConfig, load_config
 from .context import RunContext
 from .domain_runner import run_domain
+from .drive_sources import configured_drive_sources, sync_drive_source
 from .geo import write_normalized_boundaries
 from .logging_utils import configure_logging
 from .locks import workspace_lock
@@ -43,6 +44,8 @@ def _run_operation(ctx: RunContext, task: TaskKey, logger: logging.Logger) -> li
 
     if task.kind == "web":
         operation: Callable[[], None] = lambda: run_web(ctx, task.name, logger)
+    elif task.kind == "source":
+        operation = lambda: sync_drive_source(ctx.config, task.name, logger)
     elif task.kind == "prerequisite":
         operation = lambda: run_prerequisite(ctx, task.name, logger)
     elif task.kind == "boundary":
@@ -59,7 +62,9 @@ def _run_operation(ctx: RunContext, task: TaskKey, logger: logging.Logger) -> li
         task,
         logger,
         operation,
-        resume=ctx.resume,
+        # A source sync always refreshes remote metadata. Its downloader still
+        # reuses every locally verified file, so this does not repeat transfers.
+        resume=False if task.kind == "source" else ctx.resume,
         force=ctx.force,
     )
     return [result]
@@ -82,9 +87,11 @@ def build_pipeline_stages(
         domains.append("accessibility")
     if include_optional:
         domains.extend(name for name in pipeline.get("optional_domains", []) if name not in domains)
+    source_names = configured_drive_sources(config, set(domains))
     return [
         ("boundaries", [TaskKey("boundary", "normalized")]),
         ("web", [TaskKey("web", name) for name in WEB_SOURCES]),
+        ("sources", [TaskKey("source", name, "sync") for name in source_names]),
         ("prerequisites", [TaskKey("prerequisite", name) for name in PREREQUISITES]),
         (
             "domains",
@@ -392,6 +399,7 @@ def _run_pipeline_unlocked(
     stages = dict(build_pipeline_stages(config, include_optional=include_optional))
     boundary_task = stages["boundaries"][0]
     web_tasks = stages["web"]
+    source_tasks = stages["sources"]
     prerequisite_tasks = stages["prerequisites"]
     domain_tasks = stages["domains"]
     combine_task = stages["combine"][0]
@@ -420,6 +428,21 @@ def _run_pipeline_unlocked(
             run_state.record(result)
         logger.info("pipeline stage started: web", extra={"phase": "web", "run_id": run_id, "status": "running"})
         _parallel(str(config.path), run_id, "web", web_tasks, policy, logger, run_state, resume=bool(resume), force=force)
+        logger.info(
+            "pipeline stage started: sources",
+            extra={"phase": "sources", "run_id": run_id, "status": "running"},
+        )
+        _parallel(
+            str(config.path),
+            run_id,
+            "sources",
+            source_tasks,
+            policy,
+            logger,
+            run_state,
+            resume=False,
+            force=force,
+        )
         logger.info(
             "pipeline stage started: prerequisites",
             extra={"phase": "prerequisites", "run_id": run_id, "status": "running"},

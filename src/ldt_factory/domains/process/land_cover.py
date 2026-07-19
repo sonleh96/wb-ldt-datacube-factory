@@ -10,24 +10,21 @@ from ...checkpoint_utils import (
     write_frame_parquet_atomic,
 )
 from ...context import RunContext
+from ...domains.land_cover_contract import (
+    ADMIN_AREA_COLUMN,
+    DYNAMIC_WORLD_CLASSES,
+    GEE_REDUCE_REGIONS_BACKEND,
+    NODATA_CLASS,
+    count_table_path,
+    land_cover_backend,
+    normalize_class_counts,
+    raster_path,
+    validate_admin_keys,
+)
 from ...geo import load_admin2
 from ...io_utils import require_files
 from ...logging_utils import logged_action
 from ...raster_utils import validate_categorical_raster
-from ..extract.land_cover import NODATA_CLASS
-
-DYNAMIC_WORLD_CLASSES = {
-    0: "water",
-    1: "tree",
-    2: "grass",
-    3: "flood_vegetation",
-    4: "crops",
-    5: "shrub_and_scrub",
-    6: "built",
-    7: "bare",
-    8: "snow_and_ice",
-}
-ADMIN_AREA_COLUMN = "admin_area_km2"
 
 
 def derive_indicators(
@@ -87,66 +84,105 @@ def derive_indicators(
 
 def run(ctx: RunContext, logger: logging.Logger) -> None:
     import pandas as pd
-    from rasterstats import zonal_stats
 
     admin2 = load_admin2(ctx.config)
+    for column in (ctx.config.admin1, ctx.config.admin2):
+        admin2[column] = admin2[column].astype(str)
     years = ctx.config.years("land_cover")
     output_years = ctx.config.years("indicators")
     baseline_year = years[0]
+    backend = land_cover_backend(ctx.config)
     rows = []
     state_dir = ctx.config.workspace / "state" / "land_cover"
-    boundary_signature = path_signature(
-        ctx.config.boundary_path("admin2"), shapefile_family=True
-    )
 
     with logged_action(logger, "process", domain="land_cover"):
         for item_number, year in enumerate(years, start=1):
-            raster = ctx.raw("land_cover", f"{ctx.config.iso3}_{year}.tif")
-            require_files([raster], "land-cover rasters")
-            validate_categorical_raster(
-                raster,
-                valid_classes=set(DYNAMIC_WORLD_CLASSES),
-                expected_nodata=NODATA_CLASS,
-            )
-            checkpoint = state_dir / f"class_counts_{year}.parquet"
-            manifest = checkpoint.with_suffix(".manifest.json")
-            expected = {
-                "algorithm": "dynamic-world-zonal-counts-v2",
-                "raster": path_signature(raster),
-                "boundary": boundary_signature,
-                "classes": DYNAMIC_WORLD_CLASSES,
-                "nodata": NODATA_CLASS,
-            }
-            if checkpoint_matches(checkpoint, manifest, expected):
-                frame = pd.read_parquet(checkpoint)
-                logger.info(
-                    "reused land-cover checkpoint year=%d item=%d/%d rows=%d",
-                    year,
-                    item_number,
-                    len(years),
-                    len(frame),
-                    extra={"action": "checkpoint_reuse", "domain": "land_cover", "phase": str(year), "path": str(checkpoint)},
-                )
-            else:
+            if backend == GEE_REDUCE_REGIONS_BACKEND:
+                counts = count_table_path(ctx.config, year)
+                require_files([counts], "land-cover count tables")
                 with logged_action(
                     logger,
-                    "zonal_counts",
+                    "load_counts",
                     domain="land_cover",
                     phase=str(year),
-                    path=str(raster),
+                    path=str(counts),
                 ):
-                    stats = zonal_stats(
-                        admin2.geometry,
-                        raster,
-                        categorical=True,
-                        nodata=NODATA_CLASS,
+                    frame = pd.read_csv(counts)
+                action = "count_table"
+            else:
+                from rasterstats import zonal_stats
+
+                raster = raster_path(ctx.config, year)
+                require_files([raster], "land-cover rasters")
+                validate_categorical_raster(
+                    raster,
+                    valid_classes=set(DYNAMIC_WORLD_CLASSES),
+                    expected_nodata=NODATA_CLASS,
+                )
+                checkpoint = state_dir / f"class_counts_{year}.parquet"
+                manifest = checkpoint.with_suffix(".manifest.json")
+                expected = {
+                    "algorithm": "dynamic-world-zonal-counts-v2",
+                    "raster": path_signature(raster),
+                    "boundary": path_signature(
+                        ctx.config.boundary_path("admin2"), shapefile_family=True
+                    ),
+                    "classes": DYNAMIC_WORLD_CLASSES,
+                    "nodata": NODATA_CLASS,
+                }
+                if checkpoint_matches(checkpoint, manifest, expected):
+                    frame = pd.read_parquet(checkpoint)
+                    logger.info(
+                        "reused land-cover checkpoint year=%d item=%d/%d rows=%d",
+                        year,
+                        item_number,
+                        len(years),
+                        len(frame),
+                        extra={"action": "checkpoint_reuse", "domain": "land_cover", "phase": str(year), "path": str(checkpoint)},
                     )
-                    frame = admin2[[ctx.config.admin1, ctx.config.admin2]].copy()
-                    frame["year"] = year
-                    for class_id, class_name in DYNAMIC_WORLD_CLASSES.items():
-                        frame[class_name] = [float(item.get(class_id, 0)) for item in stats]
-                    write_frame_parquet_atomic(frame, checkpoint)
-                    write_checkpoint_manifest(manifest, expected, rows=len(frame))
+                else:
+                    with logged_action(
+                        logger,
+                        "zonal_counts",
+                        domain="land_cover",
+                        phase=str(year),
+                        path=str(raster),
+                    ):
+                        stats = zonal_stats(
+                            admin2.geometry,
+                            raster,
+                            categorical=True,
+                            nodata=NODATA_CLASS,
+                        )
+                        frame = admin2[[ctx.config.admin1, ctx.config.admin2]].copy()
+                        frame["year"] = year
+                        for class_id, class_name in DYNAMIC_WORLD_CLASSES.items():
+                            frame[class_name] = [float(item.get(class_id, 0)) for item in stats]
+                        write_frame_parquet_atomic(frame, checkpoint)
+                        write_checkpoint_manifest(manifest, expected, rows=len(frame))
+                action = "raster_counts"
+
+            frame = normalize_class_counts(
+                frame,
+                admin1=ctx.config.admin1,
+                admin2=ctx.config.admin2,
+                expected_year=year,
+            )
+            validate_admin_keys(
+                frame,
+                admin2,
+                admin1=ctx.config.admin1,
+                admin2=ctx.config.admin2,
+            )
+            logger.info(
+                "validated land-cover class counts backend=%s year=%d item=%d/%d rows=%d",
+                backend,
+                year,
+                item_number,
+                len(years),
+                len(frame),
+                extra={"action": action, "domain": "land_cover", "phase": str(year)},
+            )
             rows.append(frame)
 
         class_counts = pd.concat(rows, ignore_index=True)

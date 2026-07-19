@@ -11,7 +11,9 @@ def initialize(ctx: RunContext):
     service_account = ctx.require_env(str(source["service_account_env"]))
     key_file = ctx.require_env(str(source["key_file_env"]))
     credentials = ee.ServiceAccountCredentials(service_account, key_file)
-    ee.Initialize(credentials=credentials)
+    project_id = source.get("project_id")
+    options = {"project": str(project_id)} if project_id else {}
+    ee.Initialize(credentials=credentials, **options)
     return ee
 
 
