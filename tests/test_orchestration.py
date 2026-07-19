@@ -158,6 +158,21 @@ def test_cli_keeps_existing_commands_and_adds_resume_force_flags():
     )
     assert portable.data_root == "/srv/ldt"
 
+    ookla = parser.parse_args(
+        [
+            "build-ookla-year",
+            "--config",
+            "rou.yaml",
+            "--year",
+            "2026",
+            "--type",
+            "mobile",
+        ]
+    )
+    assert ookla.year == 2026
+    assert ookla.type == "mobile"
+    assert ookla.allow_incomplete_year is False
+
 
 def test_plan_exposes_stages_resources_and_dependencies(tmp_path):
     config = _config(
