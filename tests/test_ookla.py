@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import shutil
+import threading
 from pathlib import Path
 
 import pyarrow as pa
@@ -163,6 +164,29 @@ def test_build_ookla_year_streams_both_types_and_removes_raw_files(tmp_path, mon
         assert common["tests"].to_pylist() == [10]
         assert common["devices"].to_pylist() == [4]
     assert not Path(config.source("internet")["raw_dir"]).exists()
+
+
+def test_build_ookla_year_downloads_four_quarters_concurrently(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    sources = _quarter_files(tmp_path)
+    all_workers_started = threading.Barrier(4, timeout=5)
+
+    def fake_download(url, destination, **_kwargs):
+        all_workers_started.wait()
+        shutil.copyfile(sources[url.rsplit("/", 1)[-1]], destination)
+        return destination
+
+    monkeypatch.setattr("ldt_factory.ookla.download_file", fake_download)
+    result = build_ookla_year(
+        config,
+        2026,
+        _logger(),
+        network_types=("fixed",),
+        today=dt.date(2027, 1, 1),
+    )
+
+    assert result.downloaded == 4
+    assert result.rows == 5
 
 
 def test_build_ookla_year_retains_raw_files_and_no_output_on_schema_mismatch(

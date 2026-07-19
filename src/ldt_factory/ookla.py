@@ -5,6 +5,7 @@ import itertools
 import os
 import shutil
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -268,6 +269,7 @@ def build_ookla_year(
         config.data.get("network", {}).get("use_environment_proxy", True)
     )
     batch_size = int(source.get("combine_batch_size", 131_072))
+    download_workers = int(source.get("download_workers", 4))
     downloaded = 0
     reused = 0
     rows = 0
@@ -302,8 +304,8 @@ def build_ookla_year(
                     outputs.append(destination)
                     continue
 
-            quarterly_paths: list[Path] = []
-            for quarter, path in zip(QUARTER_START_MONTHS, expected_raw_paths, strict=True):
+            def acquire_quarter(target: tuple[int, Path]) -> tuple[Path, bool]:
+                quarter, path = target
                 existed = False
                 if path.is_file() and path.stat().st_size > 0:
                     try:
@@ -327,6 +329,19 @@ def build_ookla_year(
                         retries=retries,
                     )
                     _parquet_schema(path)
+                return path, existed
+
+            quarter_targets = tuple(
+                zip(QUARTER_START_MONTHS, expected_raw_paths, strict=True)
+            )
+            with ThreadPoolExecutor(
+                max_workers=min(download_workers, len(quarter_targets)),
+                thread_name_prefix="ookla-download",
+            ) as executor:
+                acquired = list(executor.map(acquire_quarter, quarter_targets))
+
+            quarterly_paths: list[Path] = []
+            for path, existed in acquired:
                 reused += int(existed)
                 downloaded += int(not existed)
                 quarterly_paths.append(path)

@@ -105,6 +105,7 @@ sources:
     raw_dir: shared_sources/ookla/raw
     request_timeout_seconds: 120
     download_retries: 5
+    download_workers: 4
     combine_batch_size: 131072
     fixed_filename_template: "{year}_combined_fixed.parquet"
     mobile_filename_template: "{year}_combined_mobile.parquet"

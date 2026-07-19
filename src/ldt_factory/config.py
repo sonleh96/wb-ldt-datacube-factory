@@ -261,12 +261,17 @@ def load_config(
                     raise ConfigError(f"sources.{source_name}.{field} must be at least 1")
     internet = sources.get("internet", {})
     if isinstance(internet, dict):
-        try:
-            batch_size = int(internet.get("combine_batch_size", 131_072))
-        except (TypeError, ValueError) as error:
-            raise ConfigError("sources.internet.combine_batch_size must be an integer") from error
-        if batch_size < 1:
-            raise ConfigError("sources.internet.combine_batch_size must be at least 1")
+        integer_options = {
+            "combine_batch_size": internet.get("combine_batch_size", 131_072),
+            "download_workers": internet.get("download_workers", 4),
+        }
+        for field, raw_value in integer_options.items():
+            try:
+                value = int(raw_value)
+            except (TypeError, ValueError) as error:
+                raise ConfigError(f"sources.internet.{field} must be an integer") from error
+            if value < 1:
+                raise ConfigError(f"sources.internet.{field} must be at least 1")
 
     from .domains.land_cover_contract import (
         GEE_REDUCE_REGIONS_BACKEND,
