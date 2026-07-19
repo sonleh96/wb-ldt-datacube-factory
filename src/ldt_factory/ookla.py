@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import itertools
 import os
+import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +18,20 @@ from .logging_utils import logged_action
 OOKLA_BASE_URL = "https://ookla-open-data.s3.amazonaws.com/parquet/performance"
 OOKLA_NETWORK_TYPES = ("fixed", "mobile")
 QUARTER_START_MONTHS = {1: 1, 2: 4, 3: 7, 4: 10}
-REQUIRED_COLUMNS = {"quadkey", "tile", "avg_d_kbps"}
+OOKLA_ID_COLUMNS = ("quadkey", "tile")
+OOKLA_MEAN_COLUMNS = (
+    "tile_x",
+    "tile_y",
+    "avg_d_kbps",
+    "avg_u_kbps",
+    "avg_lat_ms",
+    "avg_lat_down_ms",
+    "avg_lat_up_ms",
+)
+OOKLA_SUM_COLUMNS = ("tests", "devices")
+OOKLA_COLUMNS = OOKLA_ID_COLUMNS + OOKLA_MEAN_COLUMNS + OOKLA_SUM_COLUMNS
+REQUIRED_COLUMNS = set(OOKLA_COLUMNS)
+_QUADKEY_DIGITS = "0123"
 
 
 @dataclass(frozen=True)
@@ -92,7 +107,11 @@ def combine_ookla_quarters(
     destination: Path,
     *,
     batch_size: int = 131_072,
+    partition_prefix_length: int = 3,
 ) -> int:
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.compute as pc
     import pyarrow.parquet as pq
 
     paths = tuple(quarterly_paths)
@@ -100,35 +119,96 @@ def combine_ookla_quarters(
         raise ValueError(f"A yearly Ookla file requires exactly 4 quarters, got {len(paths)}")
     if batch_size < 1:
         raise ValueError("Ookla Parquet batch size must be at least 1")
+    if partition_prefix_length < 1 or partition_prefix_length > 4:
+        raise ValueError("Ookla partition prefix length must be between 1 and 4")
+
+    expected_schema = _parquet_schema(paths[0])
+    for path in paths[1:]:
+        schema = _parquet_schema(path)
+        if not schema.equals(expected_schema, check_metadata=False):
+            raise ValueError(
+                f"Ookla quarterly Parquet schema mismatch: {path} does not match {paths[0]}"
+            )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+    partition_dir = destination.with_name(
+        f".{destination.name}.{uuid.uuid4().hex}.partitions"
+    )
+    partition_dir.mkdir(parents=False, exist_ok=False)
+    partition_paths = {
+        "".join(digits): partition_dir / f"prefix-{''.join(digits)}.parquet"
+        for digits in itertools.product(_QUADKEY_DIGITS, repeat=partition_prefix_length)
+    }
+    partition_writers: dict[str, Any] = {}
     writer = None
-    expected_schema = None
     row_count = 0
     try:
         for path in paths:
             parquet = pq.ParquetFile(path)
-            schema = _parquet_schema(path)
-            if expected_schema is None:
-                expected_schema = schema
-                writer = pq.ParquetWriter(temporary, expected_schema, compression="snappy")
-            elif not schema.equals(expected_schema, check_metadata=False):
-                raise ValueError(
-                    f"Ookla quarterly Parquet schema mismatch: {path} does not match {paths[0]}"
+            for batch in parquet.iter_batches(
+                batch_size=batch_size,
+                columns=list(OOKLA_COLUMNS),
+                use_threads=True,
+            ):
+                table = pa.Table.from_batches([batch])
+                prefixes = pc.utf8_slice_codeunits(
+                    table["quadkey"],
+                    start=0,
+                    stop=partition_prefix_length,
                 )
-            for batch in parquet.iter_batches(batch_size=batch_size, use_threads=True):
-                writer.write_batch(batch)
-                row_count += batch.num_rows
+                for prefix in pc.unique(prefixes).to_pylist():
+                    if prefix not in partition_paths:
+                        raise ValueError(f"Invalid Ookla quadkey prefix: {prefix!r}")
+                    subset = table.filter(pc.equal(prefixes, prefix))
+                    partition_writer = partition_writers.get(prefix)
+                    if partition_writer is None:
+                        partition_writer = pq.ParquetWriter(
+                            partition_paths[prefix],
+                            subset.schema,
+                            compression="snappy",
+                        )
+                        partition_writers[prefix] = partition_writer
+                    partition_writer.write_table(subset)
+        for partition_writer in partition_writers.values():
+            partition_writer.close()
+        partition_writers.clear()
+
+        aggregations = {
+            **{column: "mean" for column in OOKLA_MEAN_COLUMNS},
+            **{column: "sum" for column in OOKLA_SUM_COLUMNS},
+        }
+        for prefix, partition_path in partition_paths.items():
+            if not partition_path.is_file():
+                continue
+            frame = pd.read_parquet(partition_path, columns=list(OOKLA_COLUMNS))
+            grouped = (
+                frame.groupby(
+                    list(OOKLA_ID_COLUMNS),
+                    as_index=False,
+                    sort=True,
+                    dropna=False,
+                )
+                .agg(aggregations)
+                .loc[:, list(OOKLA_COLUMNS)]
+            )
+            table = pa.Table.from_pandas(grouped, preserve_index=False)
+            if writer is None:
+                writer = pq.ParquetWriter(temporary, table.schema, compression="snappy")
+            writer.write_table(table, row_group_size=1_048_576)
+            row_count += table.num_rows
         if writer is None or row_count == 0:
             raise ValueError("Ookla quarterly Parquet files contain no rows")
         writer.close()
         writer = None
         os.replace(temporary, destination)
     finally:
+        for partition_writer in partition_writers.values():
+            partition_writer.close()
         if writer is not None:
             writer.close()
         temporary.unlink(missing_ok=True)
+        shutil.rmtree(partition_dir, ignore_errors=True)
     return row_count
 
 

@@ -18,6 +18,21 @@ from ldt_factory.ookla import (
 )
 
 
+EXPECTED_OOKLA_COLUMNS = (
+    "quadkey",
+    "tile",
+    "tile_x",
+    "tile_y",
+    "avg_d_kbps",
+    "avg_u_kbps",
+    "avg_lat_ms",
+    "avg_lat_down_ms",
+    "avg_lat_up_ms",
+    "tests",
+    "devices",
+)
+
+
 def _logger() -> logging.Logger:
     logger = logging.getLogger("test.ookla")
     logger.handlers.clear()
@@ -63,16 +78,33 @@ def _quarter_files(tmp_path: Path, *, mismatched_quarter: int | None = None) -> 
     source_dir = tmp_path / "source"
     source_dir.mkdir()
     files = {}
+    unique_quadkeys = {
+        1: "1" * 16,
+        2: "2" * 16,
+        3: "3" * 16,
+        4: "0" * 15 + "1",
+    }
     for network_type in ("fixed", "mobile"):
         for quarter in range(1, 5):
             values = {
-                "quadkey": [f"{network_type}-{quarter}"],
-                "tile": ["POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))"],
-                "avg_d_kbps": [quarter * 1000],
-                "quarter": [quarter],
+                "quadkey": ["0" * 16, unique_quadkeys[quarter]],
+                "tile": [
+                    "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+                    f"POLYGON (({quarter} 0, {quarter + 1} 0, {quarter + 1} 1, "
+                    f"{quarter} 1, {quarter} 0))",
+                ],
+                "tile_x": [0.5, quarter + 0.5],
+                "tile_y": [0.5, 0.5],
+                "avg_d_kbps": [quarter * 1000, quarter * 100],
+                "avg_u_kbps": [quarter * 500, quarter * 50],
+                "avg_lat_ms": [quarter * 10, quarter],
+                "avg_lat_down_ms": [None if quarter % 2 else quarter * 10, quarter],
+                "avg_lat_up_ms": [quarter * 20, quarter * 2],
+                "tests": [quarter, 1],
+                "devices": [1, 1],
             }
             if quarter == mismatched_quarter and network_type == "fixed":
-                values["unexpected"] = [True]
+                values["unexpected"] = [True, True]
             path = source_dir / ookla_quarter_filename(2026, quarter, network_type)
             pq.write_table(pa.table(values), path)
             files[path.name] = path
@@ -113,15 +145,23 @@ def test_build_ookla_year_streams_both_types_and_removes_raw_files(tmp_path, mon
 
     assert result.downloaded == 8
     assert result.reused == 0
-    assert result.rows == 8
+    assert result.rows == 10
     assert [path.name for path in result.outputs] == [
         "2026_combined_fixed.parquet",
         "2026_combined_mobile.parquet",
     ]
     for output in result.outputs:
         combined = pq.read_table(output)
-        assert combined.column("quarter").to_pylist() == [1, 2, 3, 4]
-        assert combined.num_rows == 4
+        assert combined.column_names == list(EXPECTED_OOKLA_COLUMNS)
+        assert combined.num_rows == 5
+        common = combined.filter(pa.compute.equal(combined["quadkey"], "0" * 16))
+        assert common["avg_d_kbps"].to_pylist() == [2500.0]
+        assert common["avg_u_kbps"].to_pylist() == [1250.0]
+        assert common["avg_lat_ms"].to_pylist() == [25.0]
+        assert common["avg_lat_down_ms"].to_pylist() == [30.0]
+        assert common["avg_lat_up_ms"].to_pylist() == [50.0]
+        assert common["tests"].to_pylist() == [10]
+        assert common["devices"].to_pylist() == [4]
     assert not Path(config.source("internet")["raw_dir"]).exists()
 
 

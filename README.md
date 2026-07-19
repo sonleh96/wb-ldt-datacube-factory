@@ -334,7 +334,9 @@ ldt-factory build-ookla-year --config $config --year 2026
 The URL layout follows the [official Ookla Open Data repository](https://github.com/teamookla/ookla-open-data).
 Use `--type fixed` or `--type mobile` to build only one network type.
 The command maps Q1 through Q4 to January, April, July, and October start dates and downloads the public Ookla S3 URLs into `sources.internet.raw_dir`.
-It validates the required Ookla columns and requires every quarterly Parquet schema to match before streaming the row groups into `{year}_combined_fixed.parquet` or `{year}_combined_mobile.parquet`.
+It validates the canonical Ookla columns and requires every quarterly Parquet schema to match.
+The annual aggregation writes one row per `(quadkey, tile)`, averages tile coordinates and speed/latency metrics across available quarters, and sums `tests` and `devices`, matching the established combined-file contract.
+Aggregation uses bounded quadkey-prefix partitions instead of loading the complete global year into memory.
 The combined file is replaced atomically, so a failed build cannot overwrite a valid annual file.
 Quarterly files and their download metadata are removed only after every selected annual output succeeds.
 Failed and interrupted builds retain the raw files so the next invocation can reuse or resume them.
