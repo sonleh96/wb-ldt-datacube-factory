@@ -190,6 +190,34 @@ def test_build_ookla_year_retains_raw_files_and_no_output_on_schema_mismatch(
     assert len(list((root / "raw").glob("*.parquet"))) == 4
 
 
+def test_build_ookla_year_rebuilds_an_empty_existing_annual_file(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    sources = _quarter_files(tmp_path)
+    root = Path(config.source("internet")["dataset_root"])
+    root.mkdir(parents=True)
+    destination = root / "2026_combined_fixed.parquet"
+    first_quarter = sources[ookla_quarter_filename(2026, 1, "fixed")]
+    pq.write_table(pq.read_table(first_quarter).slice(0, 0), destination)
+
+    def fake_download(url, download_destination, **_kwargs):
+        shutil.copyfile(sources[url.rsplit("/", 1)[-1]], download_destination)
+        return download_destination
+
+    monkeypatch.setattr("ldt_factory.ookla.download_file", fake_download)
+    result = build_ookla_year(
+        config,
+        2026,
+        _logger(),
+        network_types=("fixed",),
+        today=dt.date(2027, 1, 1),
+    )
+
+    assert result.downloaded == 4
+    assert result.reused == 0
+    assert result.rows == 5
+    assert pq.read_metadata(destination).num_rows == 5
+
+
 def test_build_ookla_year_requires_a_completed_year_by_default(tmp_path):
     with pytest.raises(ValueError, match="not complete"):
         build_ookla_year(

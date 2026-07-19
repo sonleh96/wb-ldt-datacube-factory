@@ -96,10 +96,15 @@ def _parquet_schema(path: Path) -> Any:
     import pyarrow.parquet as pq
 
     parquet = pq.ParquetFile(path)
-    missing = REQUIRED_COLUMNS - set(parquet.schema.names)
-    if missing:
-        raise ValueError(f"{path} is missing Ookla columns: {sorted(missing)}")
-    return parquet.schema_arrow
+    try:
+        if parquet.metadata.num_rows == 0:
+            raise ValueError(f"{path} contains no Ookla rows")
+        missing = REQUIRED_COLUMNS - set(parquet.schema.names)
+        if missing:
+            raise ValueError(f"{path} is missing Ookla columns: {sorted(missing)}")
+        return parquet.schema_arrow
+    finally:
+        parquet.close()
 
 
 def combine_ookla_quarters(
@@ -279,14 +284,23 @@ def build_ookla_year(
             ]
             raw_paths.extend(expected_raw_paths)
             if destination.is_file() and not force:
-                _parquet_schema(destination)
-                logger.info(
-                    "Ookla yearly file reused: %s",
-                    destination,
-                    extra={"action": "reuse_year", "path": str(destination)},
-                )
-                outputs.append(destination)
-                continue
+                try:
+                    _parquet_schema(destination)
+                except (OSError, ValueError) as error:
+                    logger.warning(
+                        "Invalid Ookla yearly file will be rebuilt: %s (%s)",
+                        destination,
+                        error,
+                        extra={"action": "rebuild_year", "path": str(destination)},
+                    )
+                else:
+                    logger.info(
+                        "Ookla yearly file reused: %s",
+                        destination,
+                        extra={"action": "reuse_year", "path": str(destination)},
+                    )
+                    outputs.append(destination)
+                    continue
 
             quarterly_paths: list[Path] = []
             for quarter, path in zip(QUARTER_START_MONTHS, expected_raw_paths, strict=True):
