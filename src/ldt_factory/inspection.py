@@ -10,6 +10,22 @@ from typing import Any
 
 from .config import FactoryConfig
 from .domain_runner import DOMAINS
+from .domains.land_cover_contract import (
+    GEE_REDUCE_REGIONS_BACKEND,
+    count_manifest_path,
+    count_table_path,
+    land_cover_backend,
+    normalize_class_counts,
+    raster_path,
+    validate_admin_keys,
+)
+from .drive_sources import (
+    GoogleDriveClient,
+    configured_drive_sources,
+    inspect_drive_source,
+    load_verified_drive_inventory,
+    source_cache_dir,
+)
 from .geo import load_admin2
 from .orchestrator import build_pipeline_stages
 from .raster_utils import validate_categorical_raster
@@ -144,6 +160,7 @@ def run_preflight(config: FactoryConfig, *, include_optional: bool = False) -> d
             "ok" if path.is_file() else "error",
             f"file exists: {path}" if path.is_file() else f"file is missing: {path}",
         )
+    admin2 = None
     try:
         admin2 = load_admin2(config)
         invalid = int((~admin2.geometry.is_valid).sum())
@@ -178,11 +195,19 @@ def run_preflight(config: FactoryConfig, *, include_optional: bool = False) -> d
         "shapely",
     }
     if domains & {"flood", "land_cover", "luminosity"}:
-        packages.update({"ee", "geemap"})
+        packages.add("ee")
+    if domains & {"flood", "luminosity"} or (
+        "land_cover" in domains
+        and land_cover_backend(config) != GEE_REDUCE_REGIONS_BACKEND
+    ):
+        packages.add("geemap")
     if "heatwaves" in domains:
         packages.update({"dask", "netCDF4", "numba", "rioxarray", "xarray"})
     if "internet" in domains:
         packages.add("pyquadkey2")
+    drive_sources = configured_drive_sources(config, domains)
+    if drive_sources:
+        packages.add("google.auth")
     missing_packages = sorted(name for name in packages if importlib.util.find_spec(name) is None)
     _check(
         checks,
@@ -225,7 +250,98 @@ def run_preflight(config: FactoryConfig, *, include_optional: bool = False) -> d
             label="Mapbox access token",
         )
 
-    if "heatwaves" in domains:
+    drive_client = None
+    if drive_sources:
+        try:
+            drive_client = GoogleDriveClient(
+                use_environment_proxy=bool(
+                    config.data.get("network", {}).get("use_environment_proxy", True)
+                )
+            )
+            _check(
+                checks,
+                "Google Drive Application Default Credentials",
+                "ok",
+                "Application Default Credentials initialized with Drive read-only scope",
+            )
+        except Exception as error:
+            _check(
+                checks,
+                "Google Drive Application Default Credentials",
+                "error",
+                f"could not initialize credentials: {type(error).__name__}: {error}",
+            )
+
+    for source_name in drive_sources:
+        label = "Heatwave" if source_name == "heatwaves" else "Ookla"
+        if drive_client is None:
+            _check(
+                checks,
+                f"{label} Drive folder",
+                "error",
+                "folder inventory was not checked because Drive credentials are unavailable",
+            )
+            continue
+        try:
+            remote = inspect_drive_source(config, source_name, client=drive_client)
+            total_bytes = sum(item.size for item in remote)
+            _check(
+                checks,
+                f"{label} Drive folder",
+                "ok",
+                f"found all {len(remote)} expected file(s), {total_bytes / (1024**3):.2f} GiB total",
+                expected_files=len(remote),
+                total_bytes=total_bytes,
+            )
+            cache_dir = source_cache_dir(config, source_name)
+            cached_bytes = sum(
+                item.size
+                for item in remote
+                if (cache_dir / item.name).is_file()
+                and (cache_dir / item.name).stat().st_size == item.size
+            )
+            remaining_bytes = total_bytes - cached_bytes
+            cache_probe = cache_dir
+            while not cache_probe.exists() and cache_probe != cache_probe.parent:
+                cache_probe = cache_probe.parent
+            free_bytes = shutil.disk_usage(cache_probe).free
+            _check(
+                checks,
+                f"{label} Drive cache capacity",
+                "error" if free_bytes < remaining_bytes else "ok",
+                (
+                    f"{remaining_bytes / (1024**3):.2f} GiB remains to download; "
+                    f"{free_bytes / (1024**3):.2f} GiB free on cache volume"
+                ),
+                remaining_bytes=remaining_bytes,
+                free_bytes=free_bytes,
+            )
+        except Exception as error:
+            _check(
+                checks,
+                f"{label} Drive folder",
+                "error",
+                f"could not validate folder inventory: {type(error).__name__}: {error}",
+            )
+            continue
+        try:
+            cached = load_verified_drive_inventory(config, source_name)
+            _check(
+                checks,
+                f"{label} verified cache",
+                "ok",
+                f"all {len(cached)} expected cached file(s) are verified",
+                cached_files=len(cached),
+            )
+        except Exception as error:
+            _check(
+                checks,
+                f"{label} verified cache",
+                "warning",
+                f"source sync is required before extraction: {type(error).__name__}: {error}",
+            )
+
+    if "heatwaves" in domains and "heatwaves" not in drive_sources:
         pattern = str(config.source("heatwaves").get("source_glob", ""))
         matches = [Path(path) for path in glob.glob(pattern)] if pattern else []
         _check(
@@ -237,36 +353,83 @@ def run_preflight(config: FactoryConfig, *, include_optional: bool = False) -> d
         )
 
     if "land_cover" in domains:
-        existing = []
-        invalid_rasters = []
-        for year in config.years("land_cover"):
-            path = config.raw_dir / "land_cover" / f"{config.iso3}_{year}.tif"
-            if not path.is_file():
-                continue
-            existing.append(path)
-            try:
-                validate_categorical_raster(
-                    path,
-                    valid_classes=set(range(9)),
-                    expected_nodata=255,
-                )
-            except ValueError as error:
-                invalid_rasters.append(f"{year}: {error}")
+        backend = land_cover_backend(config)
         _check(
             checks,
-            "Land Cover existing rasters",
-            "warning" if invalid_rasters else "ok",
+            "Land Cover backend",
+            "ok",
+            f"configured backend: {backend}",
+            backend=backend,
+        )
+        existing = []
+        invalid = []
+        if backend == GEE_REDUCE_REGIONS_BACKEND:
+            import pandas as pd
+
+            asset_id = str(config.source("earth_engine").get("admin2_asset_id", ""))
+            _check(
+                checks,
+                "Land Cover Earth Engine boundary asset",
+                "ok" if asset_id else "error",
+                f"configured asset: {asset_id}" if asset_id else "admin2_asset_id is not configured",
+                asset_id=asset_id or None,
+            )
+            for year in config.years("land_cover"):
+                path = count_table_path(config, year)
+                if not path.is_file():
+                    continue
+                existing.append(path)
+                try:
+                    if not count_manifest_path(config, year).is_file():
+                        raise ValueError("completed count-table manifest is missing")
+                    frame = normalize_class_counts(
+                        pd.read_csv(path),
+                        admin1=config.admin1,
+                        admin2=config.admin2,
+                        expected_year=year,
+                    )
+                    if admin2 is not None:
+                        validate_admin_keys(
+                            frame,
+                            admin2,
+                            admin1=config.admin1,
+                            admin2=config.admin2,
+                        )
+                except (OSError, ValueError) as error:
+                    invalid.append(f"{year}: {error}")
+            label = "Land Cover existing count tables"
+            noun = "count table"
+        else:
+            for year in config.years("land_cover"):
+                path = raster_path(config, year)
+                if not path.is_file():
+                    continue
+                existing.append(path)
+                try:
+                    validate_categorical_raster(
+                        path,
+                        valid_classes=set(range(9)),
+                        expected_nodata=255,
+                    )
+                except ValueError as error:
+                    invalid.append(f"{year}: {error}")
+            label = "Land Cover existing rasters"
+            noun = "raster"
+        _check(
+            checks,
+            label,
+            "warning" if invalid else "ok",
             (
-                f"{len(invalid_rasters)} existing raster(s) are invalid and will be re-extracted"
-                if invalid_rasters
-                else f"{len(existing)} existing raster(s) validated; missing years will be extracted"
+                f"{len(invalid)} existing {noun}(s) are invalid and will be re-extracted"
+                if invalid
+                else f"{len(existing)} existing {noun}(s) validated; missing years will be extracted"
             ),
             existing_files=len(existing),
-            invalid_files=len(invalid_rasters),
-            invalid_details=invalid_rasters,
+            invalid_files=len(invalid),
+            invalid_details=invalid,
         )
 
-    if "internet" in domains:
+    if "internet" in domains and "internet" not in drive_sources:
         source = config.source("internet")
         root = Path(str(source.get("dataset_root", ""))).expanduser()
         expected = []

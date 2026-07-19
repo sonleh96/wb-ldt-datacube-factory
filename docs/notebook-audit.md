@@ -31,9 +31,8 @@ country factory without correcting hidden state and missing dependencies.
   Configuration now declares one archive and one extracted directory.
 - The OSM download is commented out, so Key Assets, Transport, and Tourism have
   no reproducible upstream extraction in the notebook.
-- Ookla extraction is intentionally out of scope because the complete global
-  fixed/mobile parquet dataset for 2021-2025 is already available. Internet
-  validates and filters those shared files without copying them per country.
+- Ookla acquisition is now an explicit shared-source task because the complete global fixed/mobile Parquet dataset for 2021-2025 is available in a public Google Drive folder.
+  Internet validates the synchronized manifest and filters those shared files without copying them per country.
 - Land-cover aggregation is defined in the updated notebook. The factory follows
   its 2017 baseline, Dynamic World class-share change, and 10 m crop-area logic.
   It corrects `total` from a class-count mean to a sum and avoids appending the
@@ -58,7 +57,9 @@ country factory without correcting hidden state and missing dependencies.
   it remains a roughly 19.53-hour minimum job at 60 requests/minute.
 - GEE boundaries switch between GAUL 2015 and a community GAUL 2024 dataset,
   despite manually supplied boundaries being the requested source of truth.
-  The factory converts the configured admin-0 geometry to Earth Engine instead.
+  Raster exports convert the configured admin-0 geometry to Earth Engine, while
+  the optional Land Cover `gee_reduce_regions` backend requires an Earth Engine
+  table uploaded from the exact configured admin-2 boundary.
 - The Flood `year=2025` value is a dataframe join key for the 2021-2025 panel,
   not the flood scenario year. YAML names it `static_merge`; Flood separately
   retains the 2030 scenario year and 100-year return period. Transport similarly
@@ -88,9 +89,9 @@ country factory without correcting hidden state and missing dependencies.
 
 ## Intentional gaps that require source decisions
 
-- The global Ookla parquet root must be configured and accessible to every worker
-  instance. It is an input dataset, not an extraction task.
-- Heatwave source files are external GFDL netCDFs. They are not GEE products and
-  must be supplied through the configured glob or a future object-store manifest.
+- The global Ookla Parquet cache must be accessible to every worker instance.
+  The source task synchronizes it once from Google Drive and country runs consume the verified manifest.
+- Heatwave source files are external GFDL NetCDFs rather than GEE products.
+  The source task synchronizes the exact 2015-2100 projection set from Google Drive, while local-glob mode remains available for other deployments.
 - Live GEE, OpenWeatherMap, Mapbox, Climate TRACE, WorldPop, and Geofabrik runs
   remain dependent on credentials, quotas, licenses, and current upstream URLs.

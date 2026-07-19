@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Config-driven modular extraction and processing for the WB LDT datacube"
 requires-python = ">=3.11"
 dependencies = [
+  "google-auth>=2.35",
   "PyYAML>=6.0",
   "requests>=2.31",
 ]

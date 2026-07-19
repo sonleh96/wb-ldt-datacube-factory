@@ -12,9 +12,12 @@ DEFAULT_LIMITS = {
     "disk_io": 2,
     "earth_engine": 1,
     "rate_limited_api": 1,
+    "drive_download": 1,
 }
 
 DEFAULT_TASK_RESOURCES: dict[str, dict[str, int]] = {
+    "source.heatwaves.sync": {"drive_download": 1, "disk_io": 1},
+    "source.internet.sync": {"drive_download": 1, "disk_io": 1},
     "web.osm": {"disk_io": 1},
     "web.climate_trace": {"disk_io": 1},
     "web.population": {"disk_io": 1},

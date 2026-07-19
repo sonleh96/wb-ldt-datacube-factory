@@ -6,13 +6,13 @@ admin-2 datacube. This project turns the exploratory
 can be run through one resource-aware pipeline or as separate processes.
 
 Country boundaries, administrative field names, years, source locations, and
-resource limits are declared in YAML. Credentials remain in environment
-variables and are never stored in country configuration.
+resource limits are declared in YAML.
+Credentials remain in external credential stores or environment variables and are never stored in country configuration.
 
 ## What the factory provides
 
 - Manually configured admin-0, admin-1, and admin-2 boundary files.
-- Ordered web acquisition and prerequisite stages.
+- Ordered web, Google Drive acquisition, and prerequisite stages.
 - Separate extraction and processing modules for each indicator domain.
 - Dependency-aware parallel execution with CPU, memory, disk, Earth Engine,
   and API concurrency limits.
@@ -33,12 +33,12 @@ variables and are never stored in country configuration.
 | Key Assets | OSM buildings | Filters schools, universities, and hospitals into GeoParquet and GeoJSON. |
 | Transport | OSM roads and railways | Assigns lines to admin-2 boundaries, clips crossings, and calculates lengths. |
 | Flood | WRI Aqueduct in Earth Engine | Exports the current hazard specification and calculates network exposure. |
-| Land Cover | Google Dynamic World in Earth Engine | Exports yearly class rasters and calculates class-share change and crop area. |
+| Land Cover | Google Dynamic World in Earth Engine | Uses either yearly local class rasters or server-side admin-2 reductions, then calculates class-share change and crop area. |
 | Luminosity | VIIRS monthly composites in Earth Engine | Exports one annual composite per indicator year. |
 | Air Pollution | OpenWeatherMap history API | Acquires resumable grid/year summaries and aggregates PM2.5, PM10, and NO2. |
 | Emissions | Climate TRACE | Aggregates CO2e and CH4 by admin-2 and configured indicator year. |
-| Heatwaves | Local climate-projection NetCDF files | Clips the full configured projection set and calculates transport exposure to qualifying events. |
-| Internet | Existing global Ookla Parquet files | Filters fixed and mobile tiles locally; it does not download Ookla data. |
+| Heatwaves | GFDL climate-projection NetCDF files in Google Drive or a local glob | Synchronizes and verifies the complete projection set, clips it to the country, and calculates transport exposure to qualifying events. |
+| Internet | Global Ookla Parquet files in Google Drive or a local directory | Synchronizes and verifies fixed and mobile files, then filters tiles locally without copying the global data per country. |
 | Tourism | OSM POIs, buildings, land use, and transport | Counts configured tourism-related features by admin-2. |
 | Accessibility | Mapbox Isochrone API and WorldPop | Required cached extraction and population-weighted school/hospital accessibility. |
 
@@ -49,6 +49,9 @@ normalized boundaries
         |
         v
 web sources: OSM + Climate TRACE + WorldPop
+        |
+        v
+shared sources: Heatwaves + Ookla from Google Drive
         |
         v
 prerequisites: Key Assets + Transport + Population
@@ -69,7 +72,7 @@ also feed final publication.
 
 Concurrency is configured independently for each country. `pipeline.max_parallel`
 caps worker processes, while `pipeline.resource_limits` controls concurrent
-heavy-memory, disk-heavy, Earth Engine, and rate-limited API tasks.
+heavy-memory, disk-heavy, Earth Engine, Google Drive download, and rate-limited API tasks.
 
 ## Requirements
 
@@ -77,10 +80,12 @@ heavy-memory, disk-heavy, Earth Engine, and rate-limited API tasks.
 - A GDAL/GEOS/PROJ-compatible geospatial Python environment.
 - An Earth Engine service account and JSON key for Flood, Land Cover, and
   Luminosity extraction.
+- An Earth Engine Cloud project and an uploaded admin-2 table asset when using
+  the optional Land Cover `gee_reduce_regions` backend.
 - An OpenWeatherMap API key for Air Pollution.
 - A Mapbox token for required Accessibility extraction.
-- Local heatwave NetCDF inputs matching `sources.heatwaves.source_glob`.
-- Existing global Ookla fixed/mobile Parquet files for every indicator year.
+- Google Application Default Credentials with Drive read-only scope when a source uses `provider: google_drive`.
+- About 21 GiB of shared cache space for the configured Heatwave and Ookla folders, plus working space for country outputs.
 
 Examples below use Windows PowerShell and the `geospatial` conda environment.
 
@@ -117,7 +122,7 @@ Before using a configuration for another country, update at least:
   boundary file.
 - Output administrative names used in CSV join keys.
 - Observation, indicator, baseline, and static-merge years.
-- OSM, Climate TRACE, WorldPop, heatwave, and Ookla source locations.
+- OSM, Climate TRACE, WorldPop, Heatwave, and Ookla source locations or Drive folder IDs.
 - Domain and resource settings appropriate for the machine.
 
 `years.static_merge` is the dataframe join year for static snapshots. It is not
@@ -125,8 +130,8 @@ the Flood scenario year or Transport source year. The latest Transport and
 Accessibility values are broadcast across every indicator year during
 publication.
 
-Do not put credential values in the country YAML. Source sections contain only
-the names of environment variables that the factory should read.
+Do not put credential values in the country YAML.
+Source sections contain only environment-variable names or non-secret source identifiers such as public Drive folder IDs.
 
 ## Credentials
 
@@ -150,6 +155,85 @@ git check-ignore secrets.ps1
 Preflight reports only whether each credential is present; it does not print
 credential values.
 
+Drive-backed sources use Google Application Default Credentials.
+The preferred local setup requests only the `drive.readonly` scope and requires a Desktop OAuth client downloaded from Google Cloud Console.
+Set the real downloaded path and validate it before starting authentication:
+
+```powershell
+$oauthClient = "C:/path/to/downloaded-desktop-oauth-client.json"
+if (-not (Test-Path -LiteralPath $oauthClient)) {
+  throw "Desktop OAuth client file not found: $oauthClient"
+}
+gcloud auth application-default login `
+  --client-id-file=$oauthClient `
+  --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/drive.readonly"
+```
+
+When a Desktop OAuth client is unavailable, the Cloud SDK provides this alternative:
+
+```powershell
+gcloud auth login --enable-gdrive-access --update-adc
+```
+
+That alternative grants the Cloud SDK full Google Drive access rather than read-only access.
+Use it only when the broader permission is acceptable.
+
+For unattended execution, attach or federate a service account and share both source folders with that service-account address.
+Set `GOOGLE_APPLICATION_CREDENTIALS` only when a service-account JSON key is the chosen fallback.
+OAuth client files, ADC refresh tokens, and service-account keys must remain outside this repository.
+
+## Land Cover extraction backends
+
+Land Cover defaults to the existing `raster_download` backend.
+It downloads one Dynamic World classification raster for each configured year and performs zonal counts locally.
+
+```yaml
+sources:
+  land_cover:
+    backend: raster_download
+    pixel_size_m: 10
+```
+
+The `gee_reduce_regions` alternative performs the nine Dynamic World class counts on Earth Engine and downloads only the resulting annual admin-2 tables.
+Before enabling it, upload the exact normalized local admin-2 boundary to the Earth Engine Assets interface as a table.
+The asset properties must use the configured `admin1_output_name` and `admin2_output_name` fields because extraction validates every returned key against the local boundary file.
+The configured service account must be able to read that boundary asset and create table assets in the configured Cloud project.
+
+```yaml
+sources:
+  earth_engine:
+    service_account_env: EE_SERVICE_ACCOUNT
+    key_file_env: EE_KEY_FILE
+    project_id: your-earth-engine-cloud-project
+    admin2_asset_id: projects/your-earth-engine-cloud-project/assets/rou_admin2
+
+  land_cover:
+    backend: gee_reduce_regions
+    pixel_size_m: 10
+    tile_scale: 4
+    max_pixels_per_region: 1000000000
+    poll_seconds: 20
+    cleanup_intermediate_assets: false
+```
+
+Each year is submitted as a batch table export to a deterministic intermediate Earth Engine asset.
+The task ID and status are recorded in `<workspace>/state/land_cover/gee_export_{year}.json`, allowing an interrupted run to resume polling or collect an already completed asset.
+The validated local table is saved as `<workspace>/raw_data/land_cover/{ISO3}_{year}_counts.csv` and the normal processor still writes `datasets/lulc.csv`.
+Set `cleanup_intermediate_assets: true` to delete each generated intermediate asset after its local table is safely written.
+Cleanup failures are logged as warnings and do not discard the local result.
+The factory does not silently switch back to large raster downloads when a GEE task fails.
+
+To run only Land Cover after enabling the backend:
+
+```powershell
+ldt-factory preflight --config config/countries/<iso3>.yaml
+ldt-factory run-domain `
+  --config config/countries/<iso3>.yaml `
+  --name land_cover `
+  --phase all `
+  --run-id land-cover-gee
+```
+
 ## Inspect before running
 
 ```powershell
@@ -162,13 +246,21 @@ ldt-factory preflight --config $config
 - `validate` checks YAML structure and required boundary paths.
 - `plan` prints stages, dependencies, and resource assignments without running
   work. Add `--json` for machine-readable output.
-- `preflight` checks packages, boundaries, credential presence, local Heatwave
-  and Ookla inputs, free disk space, existing Land Cover rasters, and the Air
-  Pollution request estimate. It always checks the Mapbox credential required
-  by Accessibility.
+- `preflight` checks packages, boundaries, credential presence, Drive folder inventories, verified source caches, cache capacity, free disk space, existing Land Cover backend artifacts, and the Air Pollution request estimate.
+- It always checks the Mapbox credential required by Accessibility.
 
 `run` does not invoke preflight automatically. Resolve preflight errors before
 starting; warnings are reported for operator review but do not block execution.
+
+To synchronize and verify only the two shared Drive sources before domain testing:
+
+```powershell
+ldt-factory sync-source --config $config --name heatwaves --run-id heatwaves-source
+ldt-factory sync-source --config $config --name internet --run-id internet-source
+```
+
+Interrupted transfers retain `.part` files and resume with HTTP Range requests.
+Each cache receives an atomic `drive_inventory.json` containing Drive IDs, sizes, checksums, modified times, and verified local paths.
 
 ## Run the full pipeline
 
@@ -372,8 +464,11 @@ expected keys are warnings by default and can be made fatal with
   directory.
 - Flood uses an exact single-raster-cell fast path and checkpointed GeoParquet
   batches while retaining the notebook's mean-depth segment rule.
-- Land Cover validates its class range and uses nodata `255`, because Dynamic
-  World class `0` is water.
+- The raster Land Cover backend validates its class range and uses nodata `255`,
+  because Dynamic World class `0` is water.
+- The server-side Land Cover backend uses an unweighted `reduceRegions` sum for
+  all nine classes, validates exact admin-2 key coverage, and passes the compact
+  count tables to the same indicator calculation as the raster backend.
 - Luminosity exports one annual raster per indicator year instead of retaining
   every monthly raster.
 - Air Pollution stores annual sufficient statistics instead of retaining the
@@ -400,17 +495,18 @@ expected keys are warnings by default and can be made fatal with
 - Flood currently uses the factory's code-defined WRI Aqueduct scenario. Review
   the Flood extraction module before changing climate scenario, return period,
   model, or hazard year.
-- Heatwaves are external NetCDF inputs, not an Earth Engine source. Every country
-  configuration must resolve the complete intended projection set.
-- Ookla files are existing shared inputs. The factory does not download them,
-  and preflight verifies the files required for configured indicator years.
+- Heatwaves are external NetCDF inputs, not an Earth Engine source.
+  Drive-backed configuration requires the exact nine files covering 2015 through 2100.
+- Ookla remains a shared global input rather than a per-country copy.
+  Drive-backed configuration requires fixed and mobile Parquet files for every configured indicator year.
 - Air Pollution request volume depends on boundary extent, grid resolution,
   indicator years, and the configured rate. Preflight reports the request count
   and theoretical minimum duration before extraction begins.
 - Preflight reports empty or invalid admin-2 geometries but does not repair them
   automatically because geometry repair can change boundary semantics.
 - Existing Land Cover rasters using nodata `0` are invalid because Dynamic World
-  class `0` is water. They must be re-extracted with nodata `255`.
+  class `0` is water. They must be re-extracted with nodata `255` or replaced by
+  the `gee_reduce_regions` count-table backend.
 - Scores rank across the complete panel by default. Setting
   `scoring.rank_within_year: true` is a methodology change.
 - Flood, Heatwaves, and Tourism are snapshots joined to `years.static_merge`.

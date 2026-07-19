@@ -8,8 +8,9 @@ import zipfile
 import logging
 import time
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 
 import requests
 
@@ -42,6 +43,9 @@ def download_file(
     progress_interval_bytes: int = 64 * 1024 * 1024,
     retries: int = 4,
     overwrite: bool = False,
+    session: requests.Session | None = None,
+    request_headers: Mapping[str, str] | None = None,
+    source_identity: Mapping[str, Any] | None = None,
 ) -> Path:
     """Download a file atomically, resuming a retained ``.part`` with HTTP Range.
 
@@ -55,8 +59,12 @@ def download_file(
         raise IsADirectoryError(destination)
     final_metadata_path = destination.with_suffix(destination.suffix + ".download.json")
     completed_metadata = _read_json(final_metadata_path)
+    identity = dict(source_identity or {})
     if destination.is_file() and destination.stat().st_size > 0 and not overwrite:
-        if not completed_metadata or completed_metadata.get("url") == url:
+        metadata_matches = completed_metadata.get("url") == url and all(
+            completed_metadata.get(key) == value for key, value in identity.items()
+        )
+        if not completed_metadata or metadata_matches:
             if logger:
                 logger.info(
                     "download reused existing file bytes=%d",
@@ -75,31 +83,38 @@ def download_file(
     partial = destination.with_suffix(destination.suffix + ".part")
     partial_metadata_path = partial.with_suffix(partial.suffix + ".json")
     partial_metadata = _read_json(partial_metadata_path)
-    if partial_metadata and partial_metadata.get("url") != url:
+    partial_matches = partial_metadata.get("url") == url and all(
+        partial_metadata.get(key) == value for key, value in identity.items()
+    )
+    if partial_metadata and not partial_matches:
         partial.unlink(missing_ok=True)
         partial_metadata_path.unlink(missing_ok=True)
         partial_metadata = {}
 
-    with requests.Session() as session:
-        session.trust_env = use_environment_proxy
-        session.headers["Accept-Encoding"] = "identity"
+    owns_session = session is None
+    active_session = session or requests.Session()
+    manager = active_session if owns_session else nullcontext(active_session)
+    with manager as active_session:
+        if owns_session:
+            active_session.trust_env = use_environment_proxy
+        active_session.headers["Accept-Encoding"] = "identity"
         for attempt in range(1, retries + 1):
             existing = partial.stat().st_size if partial.is_file() else 0
-            headers: dict[str, str] = {}
+            headers = dict(request_headers or {})
             if existing:
                 headers["Range"] = f"bytes={existing}-"
                 validator = partial_metadata.get("etag") or partial_metadata.get("last_modified")
                 if validator:
                     headers["If-Range"] = str(validator)
             try:
-                with session.get(url, headers=headers, stream=True, timeout=timeout) as response:
+                with active_session.get(url, headers=headers, stream=True, timeout=timeout) as response:
                     if response.status_code == 416 and existing:
                         match = re.search(r"\*/(\d+)", response.headers.get("Content-Range", ""))
                         if match and existing == int(match.group(1)):
                             partial.replace(destination)
                             _write_json_atomic(
                                 final_metadata_path,
-                                {**partial_metadata, "url": url, "size": existing},
+                                {**partial_metadata, **identity, "url": url, "size": existing},
                             )
                             partial_metadata_path.unlink(missing_ok=True)
                             return destination
@@ -119,6 +134,7 @@ def download_file(
                     content_length = int(response.headers.get("Content-Length", 0)) or None
                     total = existing + content_length if append and content_length else content_length
                     partial_metadata = {
+                        **identity,
                         "url": url,
                         "etag": response.headers.get("ETag"),
                         "last_modified": response.headers.get("Last-Modified"),

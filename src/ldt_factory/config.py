@@ -111,6 +111,96 @@ def load_config(path: str | Path, *, require_boundaries: bool = True) -> Factory
         raise ConfigError("admin1_output_name and admin2_output_name must differ")
     if not isinstance(raw.get("pipeline", {}), dict):
         raise ConfigError("pipeline must be a YAML mapping")
+
+    sources = raw.get("sources", {})
+    if not isinstance(sources, dict):
+        raise ConfigError("sources must be a YAML mapping")
+    land_cover = sources.get("land_cover", {})
+    earth_engine = sources.get("earth_engine", {})
+    if not isinstance(land_cover, dict):
+        raise ConfigError("sources.land_cover must be a YAML mapping")
+    if not isinstance(earth_engine, dict):
+        raise ConfigError("sources.earth_engine must be a YAML mapping")
+    for source_name in ("heatwaves", "internet"):
+        source = sources.get(source_name, {})
+        if not isinstance(source, dict):
+            raise ConfigError(f"sources.{source_name} must be a YAML mapping")
+        provider = source.get("provider", "local")
+        if provider not in {"local", "google_drive"}:
+            raise ConfigError(
+                f"sources.{source_name}.provider must be local or google_drive"
+            )
+        if provider == "google_drive":
+            missing_drive = [
+                f"sources.{source_name}.{field}"
+                for field in ("drive_folder_id",)
+                if source.get(field) in (None, "")
+            ]
+            if not source.get("cache_dir") and not (
+                source_name == "internet" and source.get("dataset_root")
+            ):
+                missing_drive.append(f"sources.{source_name}.cache_dir")
+            if missing_drive:
+                raise ConfigError(
+                    "Google Drive sources require: " + ", ".join(missing_drive)
+                )
+            for field, default in (("request_timeout_seconds", 120), ("download_retries", 5)):
+                try:
+                    value = int(source.get(field, default))
+                except (TypeError, ValueError) as error:
+                    raise ConfigError(f"sources.{source_name}.{field} must be an integer") from error
+                if value < 1:
+                    raise ConfigError(f"sources.{source_name}.{field} must be at least 1")
+
+    from .domains.land_cover_contract import (
+        GEE_REDUCE_REGIONS_BACKEND,
+        LAND_COVER_BACKENDS,
+        land_cover_backend,
+    )
+
+    backend = land_cover_backend(config)
+    if backend not in LAND_COVER_BACKENDS:
+        raise ConfigError(
+            "sources.land_cover.backend must be one of: "
+            + ", ".join(sorted(LAND_COVER_BACKENDS))
+        )
+    numeric_options = {
+        "pixel_size_m": (land_cover.get("pixel_size_m", 10), float),
+        "tile_scale": (land_cover.get("tile_scale", 4), float),
+        "max_pixels_per_region": (
+            land_cover.get("max_pixels_per_region", 1_000_000_000),
+            int,
+        ),
+        "poll_seconds": (land_cover.get("poll_seconds", 20), float),
+    }
+    for name, (value, converter) in numeric_options.items():
+        try:
+            converted = converter(value)
+        except (TypeError, ValueError) as error:
+            raise ConfigError(f"sources.land_cover.{name} must be numeric") from error
+        if converted <= 0:
+            raise ConfigError(f"sources.land_cover.{name} must be positive")
+    cleanup = land_cover.get("cleanup_intermediate_assets", False)
+    if not isinstance(cleanup, bool):
+        raise ConfigError("sources.land_cover.cleanup_intermediate_assets must be boolean")
+
+    if backend == GEE_REDUCE_REGIONS_BACKEND:
+        missing_gee = [
+            f"sources.earth_engine.{name}"
+            for name in ("project_id", "admin2_asset_id")
+            if earth_engine.get(name) in (None, "")
+        ]
+        if missing_gee:
+            raise ConfigError(
+                "The gee_reduce_regions Land Cover backend requires: "
+                + ", ".join(missing_gee)
+            )
+        try:
+            from .domains.land_cover_contract import intermediate_asset_prefix
+
+            intermediate_asset_prefix(config)
+        except ValueError as error:
+            raise ConfigError(str(error)) from error
     # Import lazily to keep the configuration types usable by the scheduler
     # without introducing a module-level cycle.
     from .resources import ResourcePolicy

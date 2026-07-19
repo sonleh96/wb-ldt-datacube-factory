@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterable
 
 from .config import FactoryConfig
 from .context import RunContext
+from .domains.land_cover_contract import extraction_artifacts
 
 
 STATE_SCHEMA_VERSION = 1
@@ -182,7 +183,6 @@ def _input_paths(config: FactoryConfig, task: TaskKey) -> list[Path]:
             "air_pollution": ("air_pollution",),
             "flood": ("flood",),
             "heatwaves": ("heatwaves",),
-            "land_cover": ("land_cover",),
             "luminosity": ("luminosity",),
         }
         for part in raw_inputs.get(task.name, ()):
@@ -194,6 +194,8 @@ def _input_paths(config: FactoryConfig, task: TaskKey) -> list[Path]:
                     if candidate.name not in {"grid_admin2.csv", "grid_admin2.meta.json"}
                 )
             paths.extend(candidates)
+        if task.name == "land_cover":
+            paths.extend(path for path in extraction_artifacts(config) if path.is_file())
         if task.name == "emissions":
             paths.extend(_iter_files(config.raw_dir / f"climate_trace_{config.iso3}_CO2"))
             paths.extend(_iter_files(config.raw_dir / f"climate_trace_{config.iso3}_CH4"))
@@ -215,15 +217,25 @@ def _input_paths(config: FactoryConfig, task: TaskKey) -> list[Path]:
             paths.extend(candidate for candidate in config.shape_dir.glob(pattern) if candidate.is_file())
     elif task.kind == "domain" and task.phase == "extract":
         source = config.source(task.name)
-        for key, raw_value in source.items():
-            if not isinstance(raw_value, str) or not any(token in key.lower() for token in ("path", "root", "glob", "dir")):
-                continue
-            if any(character in raw_value for character in "*?["):
-                import glob
+        if source.get("provider") == "google_drive" and task.name in {"heatwaves", "internet"}:
+            from .drive_sources import drive_inventory_path, load_verified_drive_inventory
 
-                paths.extend(Path(match).resolve() for match in glob.glob(raw_value))
-            else:
-                paths.extend(_iter_files(Path(raw_value).expanduser().resolve()))
+            inventory = drive_inventory_path(config, task.name)
+            if inventory.is_file():
+                paths.append(inventory)
+                paths.extend(load_verified_drive_inventory(config, task.name))
+        if source.get("provider") != "google_drive":
+            for key, raw_value in source.items():
+                if not isinstance(raw_value, str) or not any(
+                    token in key.lower() for token in ("path", "root", "glob", "dir")
+                ):
+                    continue
+                if any(character in raw_value for character in "*?["):
+                    import glob
+
+                    paths.extend(Path(match).resolve() for match in glob.glob(raw_value))
+                else:
+                    paths.extend(_iter_files(Path(raw_value).expanduser().resolve()))
         if task.name == "emissions":
             paths.extend(_iter_files(config.raw_dir / f"climate_trace_{config.iso3}_CO2"))
             paths.extend(_iter_files(config.raw_dir / f"climate_trace_{config.iso3}_CH4"))
@@ -266,6 +278,10 @@ def _domain_process_output(config: FactoryConfig, name: str) -> Path | None:
 
 
 def _required_output_paths(config: FactoryConfig, task: TaskKey) -> list[Path]:
+    if task.kind == "source" and task.phase == "sync":
+        from .drive_sources import drive_inventory_path
+
+        return [drive_inventory_path(config, task.name)]
     if task.kind == "boundary":
         return [config.dataset_dir / f"GPBP_LDT_{config.iso3}_admin_2_regions.geojson"]
     if task.kind == "prerequisite" and task.name == "key_assets":
@@ -284,6 +300,8 @@ def _required_output_paths(config: FactoryConfig, task: TaskKey) -> list[Path]:
         ]
     if task.kind == "prerequisite" and task.name == "population":
         return [config.dataset_dir / f"{config.iso3}_population.csv"]
+    if task.kind == "domain" and task.name == "land_cover" and task.phase == "extract":
+        return extraction_artifacts(config)
     if task.kind == "domain" and task.phase == "process":
         output = _domain_process_output(config, task.name)
         return [output] if output else []
@@ -303,7 +321,14 @@ def _required_output_paths(config: FactoryConfig, task: TaskKey) -> list[Path]:
 
 def _output_paths(config: FactoryConfig, task: TaskKey) -> list[Path]:
     paths: list[Path] = list(_required_output_paths(config, task))
-    if task.kind == "boundary":
+    if task.kind == "source" and task.phase == "sync":
+        from .drive_sources import load_verified_drive_inventory
+
+        try:
+            paths.extend(load_verified_drive_inventory(config, task.name))
+        except (FileNotFoundError, OSError, ValueError):
+            pass
+    elif task.kind == "boundary":
         paths.append(config.dataset_dir / f"GPBP_LDT_{config.iso3}_admin_2_regions.geojson")
     elif task.kind == "web" and task.name == "osm":
         source = config.source("osm")
@@ -333,7 +358,7 @@ def _output_paths(config: FactoryConfig, task: TaskKey) -> list[Path]:
             "luminosity": "luminosity",
         }
         root_name = extract_roots.get(task.name)
-        if root_name:
+        if root_name and task.name != "land_cover":
             candidates = _iter_files(config.raw_dir / root_name)
             if task.name == "air_pollution":
                 candidates = (
@@ -391,6 +416,13 @@ class TaskStateStore:
 
     def dependencies(self, task: TaskKey) -> tuple[TaskKey, ...]:
         dependencies = list(_DEPENDENCIES.get((task.kind, task.name, task.phase), ()))
+        if (
+            task.kind == "domain"
+            and task.phase == "extract"
+            and task.name in {"heatwaves", "internet"}
+            and self.config.source(task.name).get("provider") == "google_drive"
+        ):
+            dependencies.insert(0, TaskKey("source", task.name, "sync"))
         if task.kind == "domain" and task.phase == "process" and not any(
             dependency.kind == "domain" and dependency.name == task.name for dependency in dependencies
         ):

@@ -58,8 +58,19 @@ sources:
     service_account_env: EE_SERVICE_ACCOUNT
     key_file_env: EE_KEY_FILE
     download_threads: 4
+    # Required only when sources.land_cover.backend is gee_reduce_regions.
+    # project_id: your-earth-engine-cloud-project
+    # admin2_asset_id: projects/your-earth-engine-cloud-project/assets/rou_admin2
   land_cover:
+    # Keep the existing local-raster workflow unless the exact normalized
+    # admin-2 boundary has been uploaded as the Earth Engine table above.
+    backend: raster_download
     pixel_size_m: 10
+    # reduceRegions options, used only by the gee_reduce_regions backend:
+    tile_scale: 4
+    max_pixels_per_region: 1000000000
+    poll_seconds: 20
+    cleanup_intermediate_assets: false
   openweathermap:
     api_key_env: OWM_API_KEY
     grid_degrees: 0.09
@@ -69,7 +80,11 @@ sources:
     retry_backoff_seconds: 2
     manifest_update_interval: 25
   heatwaves:
-    source_glob: D:/Work/WB/LDT/data/raw_data/*.nc
+    provider: google_drive
+    drive_folder_id: 1RK44Llyq_PicbNhkiAmSW3sLYuF1bi7a
+    cache_dir: D:/Work/WB/LDT/shared_sources/heatwaves/gfdl-esm4-ssp585
+    request_timeout_seconds: 120
+    download_retries: 5
     variable: tasmax
     scenario: ssp585
     threshold_c: 40
@@ -79,9 +94,12 @@ sources:
     processing_spatial_chunk_cells: 16
     dask_workers: 2
   internet:
-    # These are already-downloaded global Ookla datasets. No download/extraction
-    # step is performed; each country run spatially filters the shared files.
-    dataset_root: D:/Work/WB/LDT/countries/SRB/raw_data/internet
+    provider: google_drive
+    drive_folder_id: 1un57-XuyTR0i22X_HlnlAxnYNmbKx0RN
+    # The global files are synchronized once and shared by country runs.
+    dataset_root: D:/Work/WB/LDT/shared_sources/ookla
+    request_timeout_seconds: 120
+    download_retries: 5
     fixed_filename_template: "{year}_combined_fixed.parquet"
     mobile_filename_template: "{year}_combined_mobile.parquet"
   mapbox:
@@ -141,6 +159,8 @@ pipeline:
     disk_io: 2
     earth_engine: 1
     rate_limited_api: 1
+    # Serialize the two large Drive sources so they do not compete for bandwidth.
+    drive_download: 1
   task_resources:
     domain.flood.extract: [earth_engine, disk_io]
     domain.land_cover.extract: [earth_engine, disk_io]
