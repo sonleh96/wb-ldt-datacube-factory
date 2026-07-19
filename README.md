@@ -323,14 +323,60 @@ ldt-factory sync-source --config $config --name internet --run-id internet-sourc
 Interrupted transfers retain `.part` files and resume with HTTP Range requests.
 Each cache receives an atomic `drive_inventory.json` containing Drive IDs, sizes, checksums, modified times, and verified local paths.
 
+### Build a new annual Ookla source
+
+After all four quarters for a year have been published, download and combine both fixed and mobile Parquet files with:
+
+```powershell
+ldt-factory build-ookla-year --config $config --year 2026
+```
+
+The URL layout follows the [official Ookla Open Data repository](https://github.com/teamookla/ookla-open-data).
+Use `--type fixed` or `--type mobile` to build only one network type.
+The command maps Q1 through Q4 to January, April, July, and October start dates and downloads the public Ookla S3 URLs into `sources.internet.raw_dir`.
+It validates the required Ookla columns and requires every quarterly Parquet schema to match before streaming the row groups into `{year}_combined_fixed.parquet` or `{year}_combined_mobile.parquet`.
+The combined file is replaced atomically, so a failed build cannot overwrite a valid annual file.
+Quarterly files and their download metadata are removed only after every selected annual output succeeds.
+Failed and interrupted builds retain the raw files so the next invocation can reuse or resume them.
+
+The command refuses the current and future years by default because a complete annual dataset requires Q4.
+Use `--allow-incomplete-year` only to deliberately probe all four URLs before the normal annual release window.
+Use `--force` to rebuild an existing annual file.
+
+This maintenance command writes to the configured local shared-source directory and does not mutate Google Drive because factory Drive credentials are read-only.
+After verification, upload the combined annual file to the parent `internet` Drive folder before adding that year to `years.indicators` and running `sync-source` on other workers.
+
 ## Run the full pipeline
 
 ```powershell
+conda activate ldt-factory
+$env:LDT_DATA_ROOT = "D:/Work/WB/LDT"
 $config = "config/countries/<iso3>.yaml"
 $runId = "<iso3>-production-001"
 ldt-factory run `
   --config $config `
   --run-id $runId `
+  --resume
+```
+
+The `run` command executes the complete production order: normalized boundaries, web acquisition, shared-source synchronization, prerequisites, every configured domain extraction and processing task, indicator combination, score calculation, and the release quality gate.
+The run succeeds only after the final publication and quality tasks complete.
+
+The equivalent Bash sequence is:
+
+```bash
+set -euo pipefail
+conda activate ldt-factory
+export LDT_DATA_ROOT="/srv/ldt"
+config="config/countries/<iso3>.yaml"
+run_id="<iso3>-production-001"
+
+ldt-factory validate --config "$config"
+ldt-factory plan --config "$config"
+ldt-factory preflight --config "$config"
+ldt-factory run \
+  --config "$config" \
+  --run-id "$run_id" \
   --resume
 ```
 
@@ -356,6 +402,20 @@ ldt-factory status `
 Get-Content "$workspace/logs/$runId/orchestrator.jsonl" -Wait
 ```
 
+From another Bash shell:
+
+```bash
+config="config/countries/<iso3>.yaml"
+run_id="<iso3>-production-001"
+workspace="/path/to/country/workspace"
+
+ldt-factory status \
+  --config "$config" \
+  --run-id "$run_id"
+
+tail -f "$workspace/logs/$run_id/orchestrator.jsonl"
+```
+
 After an interruption, rerun the same command and run ID with `--resume`.
 Completed tasks and domain checkpoints that still validate will be reused.
 
@@ -365,33 +425,125 @@ Individual commands are useful for testing, recovery, or intentionally running
 different domains in separate terminals. Multiple machines may also run
 different tasks when they can access the same configured inputs and workspace.
 
+The following PowerShell sequence exposes every stage that the orchestrator normally runs:
+
 ```powershell
+$ErrorActionPreference = "Stop"
+conda activate ldt-factory
+$env:LDT_DATA_ROOT = "D:/Work/WB/LDT"
 $config = "config/countries/<iso3>.yaml"
+$runId = "<iso3>-manual-001"
 
-# Web acquisition
-ldt-factory run-web --config $config --source osm --resume
-ldt-factory run-web --config $config --source climate_trace --resume
-ldt-factory run-web --config $config --source population --resume
+# 1. Configuration and execution-plan verification.
+ldt-factory validate --config $config
+ldt-factory plan --config $config
+ldt-factory preflight --config $config
 
-# Prerequisites
-ldt-factory run-prerequisite --config $config --name key_assets --resume
-ldt-factory run-prerequisite --config $config --name transport --resume
-ldt-factory run-prerequisite --config $config --name population --resume
+# 2. Normalized publication boundary.
+ldt-factory prepare-boundaries --config $config --run-id $runId --resume
 
-# Normalized publication boundary
-ldt-factory prepare-boundaries --config $config --resume
+# 3. Web ETL acquisition.
+ldt-factory run-web --config $config --source osm --run-id $runId --resume
+ldt-factory run-web --config $config --source climate_trace --run-id $runId --resume
+ldt-factory run-web --config $config --source population --run-id $runId --resume
 
-# One domain
-ldt-factory run-domain --config $config --name flood --phase extract --resume
-ldt-factory run-domain --config $config --name flood --phase process --resume
-ldt-factory run-domain --config $config --name flood --phase all --resume
-ldt-factory run-domain --config $config --name accessibility --phase all --resume
+# 4. Shared Google Drive sources.
+ldt-factory sync-source --config $config --name heatwaves --run-id $runId
+ldt-factory sync-source --config $config --name internet --run-id $runId
 
-# Publication
-ldt-factory combine --config $config --resume
+# 5. Shared prerequisite processing.
+ldt-factory run-prerequisite --config $config --name key_assets --run-id $runId --resume
+ldt-factory run-prerequisite --config $config --name transport --run-id $runId --resume
+ldt-factory run-prerequisite --config $config --name population --run-id $runId --resume
 
-# Post-processing EDA and release quality gate
-ldt-factory quality --config $config --resume
+# 6. Domain extraction and processing.
+$domains = @(
+  "flood",
+  "land_cover",
+  "luminosity",
+  "air_pollution",
+  "emissions",
+  "heatwaves",
+  "internet",
+  "tourism",
+  "accessibility"
+)
+foreach ($domain in $domains) {
+  ldt-factory run-domain `
+    --config $config `
+    --name $domain `
+    --phase all `
+    --run-id $runId `
+    --resume
+  if ($LASTEXITCODE -ne 0) {
+    throw "Domain failed: $domain"
+  }
+}
+
+# 7. Join indicators and calculate normalized and composite scores.
+ldt-factory combine --config $config --run-id $runId --resume
+
+# 8. Generate QA evidence and enforce the release quality gate.
+ldt-factory quality --config $config --run-id $runId --resume
+```
+
+The equivalent Bash sequence is:
+
+```bash
+set -euo pipefail
+conda activate ldt-factory
+export LDT_DATA_ROOT="/srv/ldt"
+config="config/countries/<iso3>.yaml"
+run_id="<iso3>-manual-001"
+
+# 1. Configuration and execution-plan verification.
+ldt-factory validate --config "$config"
+ldt-factory plan --config "$config"
+ldt-factory preflight --config "$config"
+
+# 2. Normalized publication boundary.
+ldt-factory prepare-boundaries --config "$config" --run-id "$run_id" --resume
+
+# 3. Web ETL acquisition.
+ldt-factory run-web --config "$config" --source osm --run-id "$run_id" --resume
+ldt-factory run-web --config "$config" --source climate_trace --run-id "$run_id" --resume
+ldt-factory run-web --config "$config" --source population --run-id "$run_id" --resume
+
+# 4. Shared Google Drive sources.
+ldt-factory sync-source --config "$config" --name heatwaves --run-id "$run_id"
+ldt-factory sync-source --config "$config" --name internet --run-id "$run_id"
+
+# 5. Shared prerequisite processing.
+ldt-factory run-prerequisite --config "$config" --name key_assets --run-id "$run_id" --resume
+ldt-factory run-prerequisite --config "$config" --name transport --run-id "$run_id" --resume
+ldt-factory run-prerequisite --config "$config" --name population --run-id "$run_id" --resume
+
+# 6. Domain extraction and processing.
+domains=(
+  flood
+  land_cover
+  luminosity
+  air_pollution
+  emissions
+  heatwaves
+  internet
+  tourism
+  accessibility
+)
+for domain in "${domains[@]}"; do
+  ldt-factory run-domain \
+    --config "$config" \
+    --name "$domain" \
+    --phase all \
+    --run-id "$run_id" \
+    --resume
+done
+
+# 7. Join indicators and calculate normalized and composite scores.
+ldt-factory combine --config "$config" --run-id "$run_id" --resume
+
+# 8. Generate QA evidence and enforce the release quality gate.
+ldt-factory quality --config "$config" --run-id "$run_id" --resume
 ```
 
 Supported domain names are:
@@ -407,6 +559,73 @@ and Population before their dependent processing modules. Do not launch two
 instances of the same task against the same country workspace. Direct commands
 do not launch missing prerequisites automatically; `--phase process` assumes
 its extraction and prerequisite artifacts already exist.
+
+## End-to-end completion verification
+
+For an orchestrated run, verify the recorded task states first:
+
+```powershell
+ldt-factory status `
+  --config $config `
+  --run-id $runId `
+  --json
+```
+
+```bash
+ldt-factory status \
+  --config "$config" \
+  --run-id "$run_id" \
+  --json
+```
+
+The JSON status must be `completed`, with no failed, interrupted, or pending tasks.
+Direct manual-stage runs do not create an orchestrator run summary, so use their exit codes, task logs, and the artifact checks below.
+
+Verify the three publication files and the quality summary in PowerShell:
+
+```powershell
+$workspace = "C:/path/to/country/workspace"
+$iso3 = "<ISO3>"
+$required = @(
+  "$workspace/datasets/GPBP_LDT_${iso3}_admin_2_regions.geojson",
+  "$workspace/datasets/GPBP_LDT_${iso3}_admin_2.csv",
+  "$workspace/datasets/GPBP_LDT_${iso3}_scores_admin_2.csv",
+  "$workspace/quality/report.html",
+  "$workspace/quality/summary.json"
+)
+$missing = $required | Where-Object {
+  -not (Test-Path -LiteralPath $_ -PathType Leaf) -or (Get-Item -LiteralPath $_).Length -eq 0
+}
+if ($missing) {
+  throw "Missing or empty release artifacts: $($missing -join ', ')"
+}
+Get-Content -Raw -LiteralPath "$workspace/quality/summary.json"
+python -m pytest -q
+```
+
+Verify the same outputs in Bash:
+
+```bash
+set -euo pipefail
+workspace="/path/to/country/workspace"
+iso3="<ISO3>"
+
+for path in \
+  "$workspace/datasets/GPBP_LDT_${iso3}_admin_2_regions.geojson" \
+  "$workspace/datasets/GPBP_LDT_${iso3}_admin_2.csv" \
+  "$workspace/datasets/GPBP_LDT_${iso3}_scores_admin_2.csv" \
+  "$workspace/quality/report.html" \
+  "$workspace/quality/summary.json"; do
+  test -s "$path"
+done
+
+python -m json.tool "$workspace/quality/summary.json"
+python -m pytest -q
+```
+
+The `combine` command is the score-calculation step.
+It joins the domain outputs, computes derived indicators, calculates normalized component scores, and writes the indicator and score publication CSVs.
+The `quality` command recalculates and validates those outputs, writes the HTML and machine-readable evidence, and returns a nonzero exit code for release-blocking defects.
 
 ## Resume, force, and status
 
@@ -560,6 +779,7 @@ expected keys are warnings by default and can be made fatal with
   Drive-backed configuration requires the exact nine files covering 2015 through 2100.
 - Ookla remains a shared global input rather than a per-country copy.
   Drive-backed configuration requires fixed and mobile Parquet files for every configured indicator year.
+  New yearly files can be built from the four official quarterly URLs with `build-ookla-year`.
 - Air Pollution request volume depends on boundary extent, grid resolution,
   indicator years, and the configured rate. Preflight reports the request count
   and theoretical minimum duration before extraction begins.

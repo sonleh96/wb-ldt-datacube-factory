@@ -52,7 +52,10 @@ def test_relative_paths_resolve_from_user_data_root(tmp_path):
         data["boundaries"][level] = f"boundaries/{level}.geojson"
     data["sources"] = {
         "heatwaves": {"cache_dir": "shared_sources/heatwaves"},
-        "internet": {"dataset_root": "shared_sources/ookla"},
+        "internet": {
+            "dataset_root": "shared_sources/ookla",
+            "raw_dir": "shared_sources/ookla/raw",
+        },
     }
 
     config = load_config(_write(tmp_path, data), data_root=data_root)
@@ -66,6 +69,22 @@ def test_relative_paths_resolve_from_user_data_root(tmp_path):
     assert config.source("internet")["dataset_root"] == str(
         (data_root / "shared_sources" / "ookla").resolve()
     )
+    assert config.source("internet")["raw_dir"] == str(
+        (data_root / "shared_sources" / "ookla" / "raw").resolve()
+    )
+
+
+def test_internet_combine_batch_size_must_be_positive(tmp_path):
+    data = _base(tmp_path)
+    data["sources"] = {
+        "internet": {
+            "dataset_root": str(tmp_path / "ookla"),
+            "combine_batch_size": 0,
+        }
+    }
+
+    with pytest.raises(ConfigError, match="combine_batch_size must be at least 1"):
+        load_config(_write(tmp_path, data))
 
 
 def test_environment_data_root_and_explicit_override(tmp_path, monkeypatch):

@@ -100,8 +100,12 @@ sources:
     drive_folder_id: 1un57-XuyTR0i22X_HlnlAxnYNmbKx0RN
     # The global files are synchronized once and shared by country runs.
     dataset_root: shared_sources/ookla
+    # Temporary quarterly files are retained here only until both yearly files
+    # have been combined successfully.
+    raw_dir: shared_sources/ookla/raw
     request_timeout_seconds: 120
     download_retries: 5
+    combine_batch_size: 131072
     fixed_filename_template: "{year}_combined_fixed.parquet"
     mobile_filename_template: "{year}_combined_mobile.parquet"
   mapbox:

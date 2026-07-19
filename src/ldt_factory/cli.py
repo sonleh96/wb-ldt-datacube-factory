@@ -11,6 +11,7 @@ from .domain_runner import DOMAINS, run_domain
 from .drive_sources import DRIVE_SOURCE_NAMES
 from .inspection import build_plan, load_status, run_preflight
 from .logging_utils import configure_logging
+from .ookla import OOKLA_NETWORK_TYPES, build_ookla_year
 from .orchestrator import run_pipeline, run_unit
 from .prerequisites import PREREQUISITES
 from .task_state import TaskKey
@@ -73,6 +74,24 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--source", choices=WEB_SOURCES, required=True)
     source = configured("sync-source")
     source.add_argument("--name", choices=DRIVE_SOURCE_NAMES, required=True)
+    ookla = configured("build-ookla-year")
+    ookla.add_argument("--year", type=int, required=True)
+    ookla.add_argument(
+        "--type",
+        choices=(*OOKLA_NETWORK_TYPES, "both"),
+        default="both",
+        help="network type to build (default: both)",
+    )
+    ookla.add_argument(
+        "--allow-incomplete-year",
+        action="store_true",
+        help="attempt all four quarter URLs before the requested year has ended",
+    )
+    ookla.add_argument(
+        "--force",
+        action="store_true",
+        help="replace an existing yearly combined Parquet file",
+    )
     prereq = configured("run-prerequisite", execution=True)
     prereq.add_argument("--name", choices=PREREQUISITES, required=True)
     domain = configured("run-domain", execution=True)
@@ -169,6 +188,30 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Valid configuration for {config.country_name} ({config.iso3})")
         print(f"Data root: {config.data_root or '(not required by absolute paths)'}")
         print(f"Workspace: {config.workspace}")
+        return 0
+    if args.command == "build-ookla-year":
+        config = load_config(
+            args.config,
+            require_boundaries=False,
+            data_root=args.data_root,
+        )
+        config.prepare_directories()
+        run_id = args.run_id or dt.datetime.now().strftime("%Y%m%dT%H%M%S")
+        logger = configure_logging(
+            config.workspace / "logs" / run_id / "build-ookla-year.jsonl",
+            "ldt.build-ookla-year",
+        )
+        network_types = OOKLA_NETWORK_TYPES if args.type == "both" else (args.type,)
+        result = build_ookla_year(
+            config,
+            args.year,
+            logger,
+            network_types=network_types,
+            allow_incomplete_year=args.allow_incomplete_year,
+            force=args.force,
+        )
+        for output in result.outputs:
+            print(output)
         return 0
     if args.command == "run":
         run_id = run_pipeline(

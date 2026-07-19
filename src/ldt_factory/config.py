@@ -16,7 +16,7 @@ class ConfigError(ValueError):
 _ENVIRONMENT_VARIABLE = re.compile(
     r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))"
 )
-_SOURCE_PATH_FIELDS = ("cache_dir", "dataset_root", "source_glob")
+_SOURCE_PATH_FIELDS = ("cache_dir", "dataset_root", "raw_dir", "source_glob")
 
 
 def _expand_path_variables(
@@ -259,6 +259,14 @@ def load_config(
                     raise ConfigError(f"sources.{source_name}.{field} must be an integer") from error
                 if value < 1:
                     raise ConfigError(f"sources.{source_name}.{field} must be at least 1")
+    internet = sources.get("internet", {})
+    if isinstance(internet, dict):
+        try:
+            batch_size = int(internet.get("combine_batch_size", 131_072))
+        except (TypeError, ValueError) as error:
+            raise ConfigError("sources.internet.combine_batch_size must be an integer") from error
+        if batch_size < 1:
+            raise ConfigError("sources.internet.combine_batch_size must be at least 1")
 
     from .domains.land_cover_contract import (
         GEE_REDUCE_REGIONS_BACKEND,
