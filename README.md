@@ -103,6 +103,7 @@ python -m pytest
 ```
 
 `environment.yml` creates the consistently named Python 3.11 environment.
+It installs ABI-sensitive scientific and geospatial packages from conda-forge so NumPy, PyArrow, Numba, GDAL, GEOS, PROJ, and NetCDF-backed libraries come from one compatible native solve.
 `requirements.txt` is the required development and test installation entrypoint.
 It installs the repository in editable mode with the `geo` and `dev` extras declared in `pyproject.toml`, so the command-line entrypoint and test dependencies are included.
 

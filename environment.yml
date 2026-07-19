@@ -4,3 +4,18 @@ channels:
 dependencies:
   - python=3.11
   - pip>=24
+  # Keep ABI-sensitive packages in one conda-forge solve on every platform.
+  # requirements.txt remains authoritative for project dependency ranges.
+  - geopandas
+  - llvmlite
+  - matplotlib
+  - netcdf4
+  - numba
+  - numpy
+  - pandas
+  - pyarrow
+  - pyogrio
+  - rasterio
+  - rioxarray
+  - shapely
+  - xarray

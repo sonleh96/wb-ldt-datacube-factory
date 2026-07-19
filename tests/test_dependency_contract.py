@@ -6,6 +6,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+import yaml
+
 
 IMPORT_DISTRIBUTIONS = {
     "ee": "earthengine-api",
@@ -66,3 +68,34 @@ def test_every_direct_import_has_a_declared_dependency():
         if module in third_party and distribution not in declared
     }
     assert not missing, f"Direct imports need declared dependencies: {missing}"
+
+
+def test_conda_environment_anchors_native_dependencies():
+    project_root = Path(__file__).parents[1]
+    environment = yaml.safe_load(
+        (project_root / "environment.yml").read_text(encoding="utf-8")
+    )
+    conda_dependencies = {
+        _normalized_distribution(value)
+        for value in environment["dependencies"]
+        if isinstance(value, str)
+    }
+    native_anchors = {
+        "geopandas",
+        "llvmlite",
+        "matplotlib",
+        "netcdf4",
+        "numba",
+        "numpy",
+        "pandas",
+        "pyarrow",
+        "pyogrio",
+        "rasterio",
+        "rioxarray",
+        "shapely",
+        "xarray",
+    }
+
+    assert environment["name"] == "ldt-factory"
+    assert environment["channels"] == ["conda-forge"]
+    assert native_anchors <= conda_dependencies

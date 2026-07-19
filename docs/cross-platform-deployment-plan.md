@@ -70,10 +70,10 @@ Acceptance criteria:
 
 ## Phase 3: Reproducible Environment Resolution
 
-Status: a universal Python dependency lock is implemented; native-library compatibility remains subject to the operating-system matrix.
+Status: a universal Python dependency lock and a conda-forge native-library environment are implemented; compatibility remains subject to the operating-system matrix.
 
 - Generate and review `uv.lock` from `pyproject.toml` for Python dependencies and cross-platform environment markers.
-- Pin native geospatial library families together when solver differences can change GDAL, GEOS, PROJ, NetCDF, or Arrow compatibility.
+- Resolve ABI-sensitive scientific and geospatial libraries together through conda-forge when solver differences can change GDAL, GEOS, PROJ, NetCDF, LLVM, or Arrow compatibility.
 - Verify in CI that the lock matches `pyproject.toml` and can install all extras.
 - Document a controlled lock-refresh procedure rather than accepting ad hoc environment updates.
 
