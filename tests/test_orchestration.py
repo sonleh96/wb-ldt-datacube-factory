@@ -147,6 +147,17 @@ def test_cli_keeps_existing_commands_and_adds_resume_force_flags():
     assert existing.resume is None
     assert existing.force is False
 
+    portable = parser.parse_args(
+        [
+            "validate",
+            "--config",
+            "rou.yaml",
+            "--data-root",
+            "/srv/ldt",
+        ]
+    )
+    assert portable.data_root == "/srv/ldt"
+
 
 def test_plan_exposes_stages_resources_and_dependencies(tmp_path):
     config = _config(

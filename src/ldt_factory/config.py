@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,10 +13,57 @@ class ConfigError(ValueError):
     """Raised when a country configuration is incomplete or inconsistent."""
 
 
+_ENVIRONMENT_VARIABLE = re.compile(
+    r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))"
+)
+_SOURCE_PATH_FIELDS = ("cache_dir", "dataset_root", "source_glob")
+
+
+def _expand_path_variables(
+    value: str | Path,
+    *,
+    field: str,
+    overrides: dict[str, str] | None = None,
+) -> str:
+    variables = dict(os.environ)
+    if overrides:
+        variables.update(overrides)
+    missing: set[str] = set()
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group("braced") or match.group("plain")
+        if name not in variables:
+            missing.add(name)
+            return match.group(0)
+        return variables[name]
+
+    expanded = _ENVIRONMENT_VARIABLE.sub(replace, str(value))
+    if missing:
+        names = ", ".join(sorted(missing))
+        raise ConfigError(f"Unresolved environment variable(s) in {field}: {names}")
+    return expanded
+
+
+def _resolve_data_root(
+    value: str | Path | None,
+    *,
+    config_path: Path,
+    from_config: bool,
+) -> Path | None:
+    if value in (None, ""):
+        return None
+    expanded = _expand_path_variables(value, field="data_root")
+    candidate = Path(expanded).expanduser()
+    if not candidate.is_absolute():
+        candidate = (config_path.parent if from_config else Path.cwd()) / candidate
+    return candidate.resolve()
+
+
 @dataclass(frozen=True)
 class FactoryConfig:
     path: Path
     data: dict[str, Any]
+    data_root: Path | None = None
 
     @property
     def iso3(self) -> str:
@@ -26,7 +75,7 @@ class FactoryConfig:
 
     @property
     def workspace(self) -> Path:
-        return Path(self.data["workspace"]).expanduser().resolve()
+        return self.resolve_path(self.data["workspace"], field="workspace")
 
     @property
     def raw_dir(self) -> Path:
@@ -58,14 +107,47 @@ class FactoryConfig:
         return bool(self.pipeline.get("resume_completed", True))
 
     def source(self, name: str) -> dict[str, Any]:
-        return dict(self.data.get("sources", {}).get(name, {}))
+        source = dict(self.data.get("sources", {}).get(name, {}))
+        for field in _SOURCE_PATH_FIELDS:
+            if source.get(field) not in (None, ""):
+                source[field] = str(
+                    self.resolve_path(
+                        source[field],
+                        field=f"sources.{name}.{field}",
+                    )
+                )
+        return source
 
     def years(self, name: str) -> list[int]:
         value = self.data.get("years", {}).get(name, [])
         return [int(item) for item in value]
 
     def boundary_path(self, level: str) -> Path:
-        return Path(self.data["boundaries"][level]).expanduser().resolve()
+        return self.resolve_path(
+            self.data["boundaries"][level],
+            field=f"boundaries.{level}",
+            base=self.workspace,
+        )
+
+    def resolve_path(
+        self,
+        value: str | Path,
+        *,
+        field: str,
+        base: Path | None = None,
+    ) -> Path:
+        overrides = {"LDT_DATA_ROOT": str(self.data_root)} if self.data_root else None
+        expanded = _expand_path_variables(value, field=field, overrides=overrides)
+        candidate = Path(expanded).expanduser()
+        if not candidate.is_absolute():
+            root = base or self.data_root
+            if root is None:
+                raise ConfigError(
+                    f"Relative path in {field} requires --data-root, "
+                    "LDT_DATA_ROOT, or data_root in the country YAML"
+                )
+            candidate = root / candidate
+        return candidate.resolve()
 
     def prepare_directories(self) -> None:
         for path in (
@@ -79,8 +161,15 @@ class FactoryConfig:
             path.mkdir(parents=True, exist_ok=True)
 
 
-def load_config(path: str | Path, *, require_boundaries: bool = True) -> FactoryConfig:
-    config_path = Path(path).expanduser().resolve()
+def load_config(
+    path: str | Path,
+    *,
+    require_boundaries: bool = True,
+    data_root: str | Path | None = None,
+) -> FactoryConfig:
+    config_path = Path(
+        _expand_path_variables(path, field="config")
+    ).expanduser().resolve()
     if not config_path.is_file():
         raise ConfigError(f"Configuration file does not exist: {config_path}")
     with config_path.open("r", encoding="utf-8") as handle:
@@ -104,7 +193,24 @@ def load_config(path: str | Path, *, require_boundaries: bool = True) -> Factory
     if missing:
         raise ConfigError(f"Missing required configuration values: {', '.join(missing)}")
 
-    config = FactoryConfig(config_path, raw)
+    configured_root = data_root
+    from_config = False
+    if configured_root in (None, ""):
+        configured_root = os.environ.get("LDT_DATA_ROOT")
+    if configured_root in (None, ""):
+        configured_root = raw.get("data_root")
+        from_config = configured_root not in (None, "")
+    resolved_root = _resolve_data_root(
+        configured_root,
+        config_path=config_path,
+        from_config=from_config,
+    )
+    config = FactoryConfig(config_path, raw, resolved_root)
+    # Resolve all configured path fields during validation so path errors fail
+    # before a task starts or creates output directories.
+    config.workspace
+    for level in ("admin0", "admin1", "admin2"):
+        config.boundary_path(level)
     if len(config.iso3) != 3:
         raise ConfigError(f"country.iso3 must be an ISO-3 code, got {config.iso3!r}")
     if config.admin1 == config.admin2:
@@ -115,6 +221,8 @@ def load_config(path: str | Path, *, require_boundaries: bool = True) -> Factory
     sources = raw.get("sources", {})
     if not isinstance(sources, dict):
         raise ConfigError("sources must be a YAML mapping")
+    for source_name in sources:
+        config.source(source_name)
     land_cover = sources.get("land_cover", {})
     earth_engine = sources.get("earth_engine", {})
     if not isinstance(land_cover, dict):

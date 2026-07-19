@@ -19,13 +19,14 @@ from .web import WEB_SOURCES
 
 def _ctx(
     config_path: str,
+    data_root: str | None,
     run_id: str | None,
     unit: str,
     *,
     resume: bool = False,
     force: bool = False,
 ):
-    config = load_config(config_path)
+    config = load_config(config_path, data_root=data_root)
     config.prepare_directories()
     resolved_id = run_id or dt.datetime.now().strftime("%Y%m%dT%H%M%S")
     ctx = RunContext(config, resolved_id, resume=resume, force=force)
@@ -39,6 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
     def configured(name, *, execution: bool = False):
         command = commands.add_parser(name)
         command.add_argument("--config", required=True)
+        command.add_argument(
+            "--data-root",
+            help="base directory for relative paths (overrides LDT_DATA_ROOT)",
+        )
         command.add_argument("--run-id")
         if execution:
             command.add_argument(
@@ -93,7 +98,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "plan":
-        config = load_config(args.config, require_boundaries=False)
+        config = load_config(
+            args.config,
+            require_boundaries=False,
+            data_root=args.data_root,
+        )
         payload = build_plan(config, include_optional=args.include_optional)
         if args.json:
             print(json.dumps(payload, indent=2))
@@ -113,7 +122,11 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  {task['task_id']} [{resources}]{suffix}")
         return 0
     if args.command == "preflight":
-        config = load_config(args.config, require_boundaries=False)
+        config = load_config(
+            args.config,
+            require_boundaries=False,
+            data_root=args.data_root,
+        )
         payload = run_preflight(config, include_optional=args.include_optional)
         if args.json:
             print(json.dumps(payload, indent=2))
@@ -126,7 +139,11 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[{check['status'].upper()}] {check['name']}: {check['detail']}")
         return 2 if payload["status"] == "blocked" else 0
     if args.command == "status":
-        config = load_config(args.config, require_boundaries=False)
+        config = load_config(
+            args.config,
+            require_boundaries=False,
+            data_root=args.data_root,
+        )
         try:
             payload = load_status(config, run_id=args.run_id)
         except (FileNotFoundError, ValueError) as error:
@@ -148,8 +165,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {task_id}: {task.get('status', 'unknown')}{suffix}")
         return 0
     if args.command == "validate":
-        config = load_config(args.config)
+        config = load_config(args.config, data_root=args.data_root)
         print(f"Valid configuration for {config.country_name} ({config.iso3})")
+        print(f"Data root: {config.data_root or '(not required by absolute paths)'}")
+        print(f"Workspace: {config.workspace}")
         return 0
     if args.command == "run":
         run_id = run_pipeline(
@@ -158,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
             run_id=args.run_id,
             resume=args.resume,
             force=args.force,
+            data_root=args.data_root,
         )
         print(f"Run completed: {run_id}")
         return 0
@@ -168,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
         direct_resume = False
     ctx, logger = _ctx(
         args.config,
+        args.data_root,
         args.run_id,
         args.command,
         resume=direct_resume,

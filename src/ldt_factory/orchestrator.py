@@ -3,6 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import datetime as dt
 import logging
+import multiprocessing
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -113,12 +114,13 @@ def build_pipeline_stages(
 
 def _worker(
     config_path: str,
+    data_root: str | None,
     run_id: str,
     task: TaskKey,
     resume: bool,
     force: bool,
 ) -> list[TaskResult]:
-    config = load_config(config_path)
+    config = load_config(config_path, data_root=data_root)
     config.prepare_directories()
     worker_threads = str(ResourcePolicy.from_config(config).worker_threads)
     for variable in (
@@ -166,6 +168,7 @@ def _progress_fields(
 
 def _parallel(
     config_path: str,
+    data_root: str | None,
     run_id: str,
     stage: str,
     tasks: list[TaskKey],
@@ -189,8 +192,11 @@ def _parallel(
     running: dict[concurrent.futures.Future[list[TaskResult]], TaskKey] = {}
     used: dict[str, int] = {}
     stop_submitting = False
-    store = TaskStateStore(load_config(config_path))
-    executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(policy.max_parallel, total))
+    store = TaskStateStore(load_config(config_path, data_root=data_root))
+    executor = concurrent.futures.ProcessPoolExecutor(
+        max_workers=min(policy.max_parallel, total),
+        mp_context=multiprocessing.get_context("spawn"),
+    )
     try:
         while pending or running:
             submitted = True
@@ -209,7 +215,15 @@ def _parallel(
                         continue
                     pending.pop(index)
                     policy.reserve(task, used)
-                    future = executor.submit(_worker, config_path, run_id, task, resume, force)
+                    future = executor.submit(
+                        _worker,
+                        config_path,
+                        data_root,
+                        run_id,
+                        task,
+                        resume,
+                        force,
+                    )
                     running[future] = task
                     submitted = True
                     logger.info(
@@ -381,12 +395,13 @@ def _capture_terminal_manifests(
 def _run_pipeline_unlocked(
     config_path: str | Path,
     *,
+    data_root: str | Path | None = None,
     include_optional: bool = False,
     run_id: str | None = None,
     resume: bool | None = None,
     force: bool = False,
 ) -> str:
-    config = load_config(config_path)
+    config = load_config(config_path, data_root=data_root)
     config.prepare_directories()
     run_id = run_id or dt.datetime.now().strftime("%Y%m%dT%H%M%S")
     resume = config.resume_completed if resume is None else resume
@@ -427,13 +442,25 @@ def _run_pipeline_unlocked(
         for result in _run_operation(ctx, boundary_task, logger):
             run_state.record(result)
         logger.info("pipeline stage started: web", extra={"phase": "web", "run_id": run_id, "status": "running"})
-        _parallel(str(config.path), run_id, "web", web_tasks, policy, logger, run_state, resume=bool(resume), force=force)
+        _parallel(
+            str(config.path),
+            str(config.data_root) if config.data_root else None,
+            run_id,
+            "web",
+            web_tasks,
+            policy,
+            logger,
+            run_state,
+            resume=bool(resume),
+            force=force,
+        )
         logger.info(
             "pipeline stage started: sources",
             extra={"phase": "sources", "run_id": run_id, "status": "running"},
         )
         _parallel(
             str(config.path),
+            str(config.data_root) if config.data_root else None,
             run_id,
             "sources",
             source_tasks,
@@ -449,6 +476,7 @@ def _run_pipeline_unlocked(
         )
         _parallel(
             str(config.path),
+            str(config.data_root) if config.data_root else None,
             run_id,
             "prerequisites",
             prerequisite_tasks,
@@ -461,6 +489,7 @@ def _run_pipeline_unlocked(
         logger.info("pipeline stage started: domains", extra={"phase": "domains", "run_id": run_id, "status": "running"})
         _parallel(
             str(config.path),
+            str(config.data_root) if config.data_root else None,
             run_id,
             "domains",
             domain_tasks,
@@ -538,18 +567,20 @@ def _run_pipeline_unlocked(
 def run_pipeline(
     config_path: str | Path,
     *,
+    data_root: str | Path | None = None,
     include_optional: bool = False,
     run_id: str | None = None,
     resume: bool | None = None,
     force: bool = False,
 ) -> str:
     """Run one orchestrated pipeline while preventing a second full-run writer."""
-    config = load_config(config_path)
+    config = load_config(config_path, data_root=data_root)
     config.prepare_directories()
     lock_path = config.workspace / "state" / "pipeline.lock"
     with workspace_lock(lock_path, label=f"{config.country_name} ({config.iso3}) workspace"):
         return _run_pipeline_unlocked(
             config_path,
+            data_root=config.data_root,
             include_optional=include_optional,
             run_id=run_id,
             resume=resume,

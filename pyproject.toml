@@ -11,6 +11,7 @@ dependencies = [
   "google-auth>=2.35",
   "PyYAML>=6.0",
   "requests>=2.31",
+  "urllib3>=2.0",
 ]
 
 [project.optional-dependencies]
