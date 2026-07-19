@@ -39,6 +39,86 @@ def test_load_config_resolves_contract(tmp_path):
     assert config.workspace == (tmp_path / "workspace").resolve()
 
 
+def test_relative_paths_resolve_from_user_data_root(tmp_path):
+    data_root = tmp_path / "data root \u6570\u636e"
+    workspace = data_root / "countries" / "ROU"
+    boundary_dir = workspace / "boundaries"
+    boundary_dir.mkdir(parents=True)
+    data = _base(tmp_path)
+    data["workspace"] = "countries/ROU"
+    for level in ("admin0", "admin1", "admin2"):
+        path = boundary_dir / f"{level}.geojson"
+        path.write_text("{}", encoding="utf-8")
+        data["boundaries"][level] = f"boundaries/{level}.geojson"
+    data["sources"] = {
+        "heatwaves": {"cache_dir": "shared_sources/heatwaves"},
+        "internet": {"dataset_root": "shared_sources/ookla"},
+    }
+
+    config = load_config(_write(tmp_path, data), data_root=data_root)
+
+    assert config.data_root == data_root.resolve()
+    assert config.workspace == workspace.resolve()
+    assert config.boundary_path("admin2") == (boundary_dir / "admin2.geojson").resolve()
+    assert config.source("heatwaves")["cache_dir"] == str(
+        (data_root / "shared_sources" / "heatwaves").resolve()
+    )
+    assert config.source("internet")["dataset_root"] == str(
+        (data_root / "shared_sources" / "ookla").resolve()
+    )
+
+
+def test_environment_data_root_and_explicit_override(tmp_path, monkeypatch):
+    env_root = tmp_path / "environment"
+    explicit_root = tmp_path / "explicit"
+    data = _base(tmp_path)
+    data["workspace"] = "${LDT_DATA_ROOT}/countries/ROU"
+    for level in ("admin0", "admin1", "admin2"):
+        data["boundaries"][level] = str(tmp_path / f"{level}.geojson")
+    monkeypatch.setenv("LDT_DATA_ROOT", str(env_root))
+
+    from_environment = load_config(_write(tmp_path, data))
+    overridden = load_config(_write(tmp_path, data), data_root=explicit_root)
+
+    assert from_environment.workspace == (env_root / "countries" / "ROU").resolve()
+    assert overridden.workspace == (explicit_root / "countries" / "ROU").resolve()
+
+
+def test_yaml_data_root_is_relative_to_config_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("LDT_DATA_ROOT", raising=False)
+    data = _base(tmp_path)
+    data["data_root"] = "local-data"
+    data["workspace"] = "countries/ROU"
+
+    config = load_config(_write(tmp_path, data))
+
+    assert config.data_root == (tmp_path / "local-data").resolve()
+    assert config.workspace == (
+        tmp_path / "local-data" / "countries" / "ROU"
+    ).resolve()
+
+
+def test_relative_path_without_data_root_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.delenv("LDT_DATA_ROOT", raising=False)
+    data = _base(tmp_path)
+    data["workspace"] = "countries/ROU"
+
+    with pytest.raises(ConfigError, match="Relative path in workspace requires --data-root"):
+        load_config(_write(tmp_path, data))
+
+
+def test_unresolved_path_variable_names_the_field(tmp_path, monkeypatch):
+    monkeypatch.delenv("MISSING_LDT_ROOT", raising=False)
+    data = _base(tmp_path)
+    data["workspace"] = "${MISSING_LDT_ROOT}/countries/ROU"
+
+    with pytest.raises(
+        ConfigError,
+        match=r"Unresolved environment variable\(s\) in workspace: MISSING_LDT_ROOT",
+    ):
+        load_config(_write(tmp_path, data))
+
+
 def test_load_config_rejects_same_admin_names(tmp_path):
     data = _base(tmp_path)
     data["boundaries"]["admin2_output_name"] = "County"

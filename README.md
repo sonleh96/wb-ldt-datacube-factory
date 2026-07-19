@@ -87,36 +87,88 @@ heavy-memory, disk-heavy, Earth Engine, Google Drive download, and rate-limited 
 - Google Application Default Credentials with Drive read-only scope when a source uses `provider: google_drive`.
 - About 21 GiB of shared cache space for the configured Heatwave and Ookla folders, plus working space for country outputs.
 
-Examples below use Windows PowerShell and the `geospatial` conda environment.
+The supported Conda environment name is `ldt-factory` on Windows, Linux, and macOS.
 
 ## Installation
 
-```powershell
-$repo = "C:/path/to/wb-ldt-datacube-factory"
-Set-Location $repo
-conda activate geospatial
-python -m pip install -e ".[geo,dev]"
-ldt-factory --help
-```
+Run this sequence from the repository root on Windows PowerShell, Linux, or macOS:
 
-The `geo` extra installs runtime geospatial dependencies. The `dev` extra adds
-pytest.
-
-For a non-editable environment setup, the equivalent complete dependency list
-is also available in `requirements.txt`:
-
-```powershell
+```text
+conda env create --file environment.yml
+conda activate ldt-factory
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+ldt-factory --help
+python -m pytest
 ```
+
+`environment.yml` creates the consistently named Python 3.11 environment.
+It installs ABI-sensitive scientific and geospatial packages from conda-forge so NumPy, PyArrow, Numba, GDAL, GEOS, PROJ, and NetCDF-backed libraries come from one compatible native solve.
+`requirements.txt` is the required development and test installation entrypoint.
+It installs the repository in editable mode with the `geo` and `dev` extras declared in `pyproject.toml`, so the command-line entrypoint and test dependencies are included.
+
+For a reproducible installation from the checked-in universal lock, install the pinned lock tool and synchronize the active Conda environment:
+
+```text
+python -m pip install "uv==0.11.26"
+uv sync --active --locked --all-extras
+```
+
+Use `requirements.txt` for normal development and dependency updates.
+Use `uv.lock` for repeatable CI or deployment builds.
+Refresh the lock intentionally with `uv lock --upgrade`, rerun the complete test suite, and review all version changes before committing it.
+
+Update an existing environment with:
+
+```text
+conda env update --name ldt-factory --file environment.yml --prune
+conda activate ldt-factory
+python -m pip install --upgrade -r requirements.txt
+```
+
+For a non-editable runtime-only installation, use `python -m pip install ".[geo]"` from the repository root.
+The remaining portability work is tracked in [the cross-platform deployment plan](docs/cross-platform-deployment-plan.md).
 
 ## Country configuration
 
-Country files live under `config/countries/`. Each YAML file is a complete
-country definition and can be used as the starting point for another country.
+Country files live under `config/countries/`.
+Each YAML file is a complete country definition and can be used as the starting point for another country.
+
+Machine-specific storage locations must stay outside committed country files.
+Set one data root using the following precedence:
+
+1. Pass `--data-root` to an `ldt-factory` command.
+2. Set the `LDT_DATA_ROOT` environment variable.
+3. Set an optional top-level `data_root` in a local or deployment-specific country YAML.
+
+Existing absolute paths remain supported and do not require a data root.
+Relative `workspace`, source `cache_dir`, source `dataset_root`, and local `source_glob` values resolve from the data root.
+Relative boundary paths resolve from the country workspace.
+
+For the committed Romania configuration, set the root that contains `countries/` and `shared_sources/`:
+
+```powershell
+$env:LDT_DATA_ROOT = "D:/Work/WB/LDT"
+ldt-factory validate --config config/countries/rou.yaml
+```
+
+```bash
+export LDT_DATA_ROOT="/srv/ldt"
+ldt-factory validate --config config/countries/rou.yaml
+```
+
+The equivalent one-command override is:
+
+```text
+ldt-factory validate --config config/countries/rou.yaml --data-root /srv/ldt
+```
+
+`validate` prints the resolved data root and workspace so operators can confirm path selection before execution.
+An unresolved environment variable or a relative path without a data root is a configuration error.
 
 Before using a configuration for another country, update at least:
 
-- `country.iso3`, `country.name`, and `workspace`.
+- `country.iso3`, `country.name`, and the relative `workspace`.
 - The three boundary paths.
 - `admin1_source_field` and `admin2_source_field` as they appear in the admin-2
   boundary file.
@@ -154,6 +206,15 @@ git check-ignore secrets.ps1
 
 Preflight reports only whether each credential is present; it does not print
 credential values.
+
+On Linux or macOS, export the equivalent values from a secret manager or an untracked shell file:
+
+```bash
+export EE_SERVICE_ACCOUNT="service-account@example.iam.gserviceaccount.com"
+export EE_KEY_FILE="/secure/location/earth-engine-key.json"
+export OWM_API_KEY="..."
+export MAPBOX_ACCESS_TOKEN="..."
+```
 
 Drive-backed sources use Google Application Default Credentials.
 The preferred local setup requests only the `drive.readonly` scope and requires a Desktop OAuth client downloaded from Google Cloud Console.
@@ -518,9 +579,12 @@ expected keys are warnings by default and can be made fatal with
 
 ## Testing
 
-```powershell
-conda activate geospatial
-python -m pytest
+Install and test through the same dependency path used by clean deployments:
+
+```text
+conda activate ldt-factory
+python -m pip install -r requirements.txt
+python -m pytest -q
 ```
 
 Tests cover configuration, contracts, orchestration state, resource limits,
@@ -528,14 +592,21 @@ API caches, downloads, Flood batching, Internet filters, Heatwave processing,
 Land Cover calculations, Population aggregation, Transport geometry handling,
 and publication validation.
 
+GitHub Actions repeats the documented requirements installation and test suite on Ubuntu x64, Windows x64, macOS Intel, and macOS ARM64.
+It also verifies that `uv.lock` is current and can create a complete locked environment.
+
 ## Repository layout
 
 ```text
 config/countries/             country YAML files
 docs/notebook-audit.md        notebook contradictions and methodology decisions
+docs/cross-platform-deployment-plan.md
+                              deployment phases and acceptance criteria
+environment.yml               ldt-factory Conda environment definition
 src/ldt_factory/              CLI, orchestration, state, I/O, and shared helpers
 src/ldt_factory/domains/      per-domain extract and process modules
 tests/                        regression and contract tests
+uv.lock                       universal dependency lock
 ```
 
 See [docs/notebook-audit.md](docs/notebook-audit.md) for notebook contradictions,

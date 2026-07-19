@@ -219,3 +219,4 @@ __marimo__/
 
 # Local credentials for WB LDT pipeline runs
 secrets.ps1
+secrets.sh

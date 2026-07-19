@@ -11,12 +11,14 @@ country:
   continent: europe
   timezone: Europe/Bucharest
 
-workspace: D:/Work/WB/LDT/countries/ROU
+# Relative paths resolve from --data-root or LDT_DATA_ROOT.
+workspace: countries/ROU
 
 boundaries:
-  admin0: D:/Work/WB/LDT/countries/ROU/rou_admin_boundaries.shp/rou_admin0_em.shp
-  admin1: D:/Work/WB/LDT/countries/ROU/rou_admin_boundaries.shp/rou_admin1_em.shp
-  admin2: D:/Work/WB/LDT/countries/ROU/rou_admin_boundaries.shp/rou_admin2_em.shp
+  # Boundary paths are relative to this country's workspace.
+  admin0: rou_admin_boundaries.shp/rou_admin0_em.shp
+  admin1: rou_admin_boundaries.shp/rou_admin1_em.shp
+  admin2: rou_admin_boundaries.shp/rou_admin2_em.shp
   admin1_source_field: adm1_name
   admin2_source_field: adm2_name
   admin1_output_name: County
@@ -82,7 +84,7 @@ sources:
   heatwaves:
     provider: google_drive
     drive_folder_id: 1RK44Llyq_PicbNhkiAmSW3sLYuF1bi7a
-    cache_dir: D:/Work/WB/LDT/shared_sources/heatwaves/gfdl-esm4-ssp585
+    cache_dir: shared_sources/heatwaves/gfdl-esm4-ssp585
     request_timeout_seconds: 120
     download_retries: 5
     variable: tasmax
@@ -97,7 +99,7 @@ sources:
     provider: google_drive
     drive_folder_id: 1un57-XuyTR0i22X_HlnlAxnYNmbKx0RN
     # The global files are synchronized once and shared by country runs.
-    dataset_root: D:/Work/WB/LDT/shared_sources/ookla
+    dataset_root: shared_sources/ookla
     request_timeout_seconds: 120
     download_retries: 5
     fixed_filename_template: "{year}_combined_fixed.parquet"
