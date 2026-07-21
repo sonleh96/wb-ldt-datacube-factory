@@ -143,12 +143,14 @@ def discover_area(
     completed_passes = 0
     pass_errors: list[str] = []
     requests: list[dict[str, Any]] = []
+    costs: list[dict[str, Any]] = []
     if path.is_file() and not force:
         cached = _load_area_record(path)
         candidates = [PlanCandidate.from_dict(value) for value in cached.get("candidates", [])]
         completed_passes = int(cached.get("completed_passes", 0))
         pass_errors = list(cached.get("pass_errors", []))
         requests = list(cached.get("requests", []))
+        costs = list(cached.get("costs", []))
 
     minimum_passes = int(config.search.get("minimum_passes", 2))
     max_passes = int(config.search["max_passes"])
@@ -164,6 +166,15 @@ def discover_area(
                 task_id=area.admin2_id,
             ):
                 response = client.search(request)
+            cost = response.get("costDollars", {})
+            if isinstance(cost, dict):
+                costs.append(
+                    {
+                        "pass_number": pass_number,
+                        "request_id": str(response.get("requestId") or ""),
+                        "total": float(cost.get("total", 0.0) or 0.0),
+                    }
+                )
             candidates.extend(
                 candidates_from_response(
                     config,
@@ -203,6 +214,7 @@ def discover_area(
             "completed_passes": completed_passes,
             "pass_errors": pass_errors,
             "requests": requests,
+            "costs": costs,
             "candidates": [candidate.to_dict() for candidate in ranked],
             "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         }

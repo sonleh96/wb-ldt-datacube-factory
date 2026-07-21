@@ -74,6 +74,13 @@ Concurrency is configured independently for each country. `pipeline.max_parallel
 caps worker processes, while `pipeline.resource_limits` controls concurrent
 heavy-memory, disk-heavy, Earth Engine, Google Drive download, and rate-limited API tasks.
 
+## Separate development-plan workflow
+
+`ldt-plans` is an independent admin-2 development-plan discovery, review, and GCS acquisition workflow.
+It does not participate in the PIL indicator or scoring DAG and never blocks `ldt-factory run`.
+It performs native-language Exa searches, exports an Excel review queue, freshly revalidates approved documents, and deletes temporary files only after verified GCS publication.
+See [the development-plan workflow guide](docs/development-plan-workflow.md) for the Serbia and Zambia contracts, operator commands, acceptance policy, and evaluation metrics.
+
 ## Requirements
 
 - Python 3.11 or newer.

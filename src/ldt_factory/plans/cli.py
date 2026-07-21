@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 from pathlib import Path
 
 from .acquisition import GCSObjectStore, acquire_approved
 from .config import load_plan_config
 from .discovery import discover_all
 from .exa import ExaClient
+from .evaluation import evaluate_run
 from .registry import load_admin_registry
 from .review import apply_review_workbook, export_review_workbook
 from ..logging_utils import configure_logging
@@ -36,6 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
     apply_review = configured("apply-review", run_id=True)
     apply_review.add_argument("--workbook", required=True)
     configured("acquire", run_id=True)
+    evaluate = configured("evaluate", run_id=True)
+    evaluate.add_argument("--gold")
     return parser
 
 
@@ -107,6 +111,14 @@ def main(argv: list[str] | None = None) -> int:
             logger=logger,
         )
         print(f"Verified GCS documents: {len(documents)}")
+    elif args.command == "evaluate":
+        report = evaluate_run(
+            config,
+            args.run_id,
+            areas,
+            gold_path=Path(args.gold) if args.gold else None,
+        )
+        print(json.dumps(report, indent=2))
     return 0
 
 

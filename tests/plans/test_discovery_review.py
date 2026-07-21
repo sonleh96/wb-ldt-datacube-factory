@@ -9,6 +9,7 @@ from openpyxl import load_workbook
 
 from ldt_factory.plans.config import load_plan_config
 from ldt_factory.plans.discovery import discover_area, load_area_selection
+from ldt_factory.plans.evaluation import evaluate_run
 from ldt_factory.plans.registry import load_admin_registry
 from ldt_factory.plans.review import apply_review_workbook, export_review_workbook
 from ldt_factory.plans.scoring import canonicalize_url
@@ -178,3 +179,73 @@ def test_url_canonicalization_removes_tracking_and_fragments():
     assert canonicalize_url("HTTPS://Example.COM/a.pdf?utm_source=x&id=2#page=3") == (
         "https://example.com/a.pdf?id=2"
     )
+
+
+def test_evaluation_reports_rank_selection_and_field_metrics(tmp_path: Path):
+    config = _config(tmp_path)
+    area = load_admin_registry(config)[0]
+    config.prepare_run("run-1")
+    discover_area(config, area, run_id="run-1", client=FakeExaClient(), logger=_logger())
+    gold_path = tmp_path / "gold.csv"
+    with gold_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "admin2_id",
+                "candidate_url",
+                "relevance",
+                "document_status",
+                "start_year",
+                "end_year",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "admin2_id": "TST001",
+                "candidate_url": "https://central.gov.test/approved.pdf",
+                "relevance": 3,
+                "document_status": "approved",
+                "start_year": 2023,
+                "end_year": 2033,
+            }
+        )
+        writer.writerow(
+            {
+                "admin2_id": "TST001",
+                "candidate_url": "https://central.gov.test/draft.pdf",
+                "relevance": 1,
+            }
+        )
+
+    report = evaluate_run(config, "run-1", [area], gold_path=gold_path)
+
+    assert report["gold"]["ndcg_at_5"] == 1.0
+    assert report["gold"]["labeled_area_count"] == 1
+    assert report["gold"]["recall_at_10"] == 1.0
+    assert report["gold"]["latest_approved_precision_at_1"] == 1.0
+    assert report["gold"]["auto_accept_precision"] == 1.0
+    assert report["gold"]["field_exact_match"] == {
+        "document_status": 1.0,
+        "start_year": 1.0,
+        "end_year": 1.0,
+    }
+    assert (config.run_dir("run-1") / "reports" / "evaluation.json").is_file()
+
+
+def test_evaluation_counts_labeled_areas_without_search_results_as_misses(tmp_path: Path):
+    config = _config(tmp_path)
+    area = load_admin_registry(config)[0]
+    config.prepare_run("run-1")
+    gold_path = tmp_path / "gold.csv"
+    gold_path.write_text(
+        "admin2_id,candidate_url,relevance\n"
+        f"{area.admin2_id},https://central.gov.test/approved.pdf,3\n",
+        encoding="utf-8",
+    )
+
+    report = evaluate_run(config, "run-1", [area], gold_path=gold_path)
+
+    assert report["gold"]["ndcg_at_5"] == 0.0
+    assert report["gold"]["recall_at_10"] == 0.0
+    assert report["gold"]["latest_approved_precision_at_1"] == 0.0
