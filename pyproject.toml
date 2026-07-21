@@ -9,6 +9,9 @@ description = "Config-driven modular extraction and processing for the WB LDT da
 requires-python = ">=3.11"
 dependencies = [
   "google-auth>=2.35",
+  "google-cloud-storage>=2.18",
+  "google-crc32c>=1.6",
+  "openpyxl>=3.1",
   "PyYAML>=6.0",
   "requests>=2.31",
   "urllib3>=2.0",
@@ -38,6 +41,7 @@ dev = ["pytest>=8"]
 
 [project.scripts]
 ldt-factory = "ldt_factory.cli:main"
+ldt-plans = "ldt_factory.plans.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

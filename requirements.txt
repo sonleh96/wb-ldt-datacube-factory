@@ -1,3 +1,5 @@
 # Complete editable development and test installation.
 # Dependency versions are defined once in pyproject.toml.
+# Base dependencies include the Excel review and verified GCS publishing stack used by ldt-plans.
+# The geo extra installs the scientific pipeline, and the dev extra installs the test suite.
 -e .[geo,dev]
