@@ -8,6 +8,7 @@ import yaml
 
 from ldt_factory.plans.config import PlanConfigError, load_plan_config
 from ldt_factory.plans.registry import load_admin_registry
+from ldt_factory.plans.scoring import normalize_status
 
 
 def _write_config(tmp_path: Path, registry_rows: list[dict[str, str]], **registry_overrides):
@@ -106,3 +107,26 @@ def test_plan_config_rejects_relative_paths_without_data_root(tmp_path: Path, mo
     monkeypatch.delenv("LDT_DATA_ROOT", raising=False)
     with pytest.raises(PlanConfigError, match="no data root"):
         load_plan_config(config_path)
+
+
+def test_status_normalization_uses_country_specific_terms(tmp_path: Path):
+    config_path = _write_config(tmp_path, [{"name": "A", "parent": "B"}])
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["search"]["final_terms"] = ["miratuar"]
+    payload["search"]["draft_terms"] = ["për konsultim publik"]
+    config_path.write_text(yaml.safe_dump(payload, allow_unicode=True), encoding="utf-8")
+    config = load_plan_config(config_path, data_root=tmp_path)
+
+    assert normalize_status("unknown", "Plani është miratuar", config) == "final"
+    assert normalize_status("unknown", "Dokument për konsultim publik", config) == "draft"
+
+
+def test_committed_albania_profile_contract(tmp_path: Path):
+    path = Path(__file__).parents[2] / "config" / "development_plans" / "alb.yaml"
+    config = load_plan_config(path, data_root=tmp_path, require_registry=False)
+
+    assert config.iso3 == "ALB"
+    assert config.registry["name_field"] == "Municipality"
+    assert config.registry["parent_field"] == "County"
+    assert config.storage_prefix == "ldt/sources_albania/municipalities"
+    assert config.review["auto_accept_enabled"] is False

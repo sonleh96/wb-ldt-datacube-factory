@@ -15,23 +15,24 @@ Automatic acquisition is disabled in the committed country configurations until 
 
 The committed profiles are:
 
+- `config/development_plans/alb.yaml` for 61 Albanian municipalities from `GPBP_LDT_ALB_admin_2.csv`.
 - `config/development_plans/srb.yaml` for 161 Serbian municipalities from `GPBP_LDT_SRB_admin_2_v2.csv`.
 - `config/development_plans/zmb.yaml` for 116 Zambian districts from `GPBP_LDT_ZMB_admin_2.csv`.
 
+The Albania profile searches Albanian municipal strategic-development terminology and writes under `gs://wb-ldt/ldt/sources_albania/municipalities/{storage_slug}/`.
 The Serbia profile searches Serbian Cyrillic and Latin terminology and writes under `gs://wb-ldt/ldt/sources/municipal/{storage_slug}/`.
 The Zambia profile searches Integrated Development Plan terminology and writes under `gs://wb-ldt/ldt/sources_zambia/districts/{storage_slug}/`.
 Each admin-2 area receives a stable identifier even when the source panel contains one row per year.
 Serbia preserves the legacy ASCII replacement slug convention, including folder names such as `ba-ka-palanka`.
 
-Set the root containing `countries/` and the independent `plan_workflows/` workspace before running either profile:
+Load the ignored repository-local secret file before running a profile:
 
 ```powershell
-$env:LDT_DATA_ROOT = "D:/Work/WB/LDT"
-$env:EXA_API_KEY = "..."
-gcloud auth application-default login
+. .\secrets.ps1
 ```
 
 The Exa key and Google credentials must remain outside YAML and Git.
+`GOOGLE_APPLICATION_CREDENTIALS` can point to the same service-account key used by Earth Engine.
 The Google identity needs permission to create and update objects in the configured bucket prefixes.
 
 ## Workflow

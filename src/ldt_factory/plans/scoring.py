@@ -54,6 +54,8 @@ def normalize_status(value: str, text: str, config: DevelopmentPlanConfig) -> st
         return "adopted"
     if "final" in combined or "финал" in combined:
         return "final"
+    if any(term.casefold() in combined for term in config.search.get("final_terms", ())):
+        return "final"
     if normalized in FORMAL_STATUSES | DRAFT_STATUSES:
         return normalized
     return "unknown"

@@ -1,0 +1,64 @@
+schema_version: 1
+
+country:
+  iso3: ALB
+  name: Albania
+  languages: [sq]
+  admin2_types: [bashki, bashkia, municipality]
+
+# Relative paths resolve from --data-root or LDT_DATA_ROOT.
+workspace: plan_workflows/ALB
+
+admin_registry:
+  path: countries/ALB/datasets/GPBP_LDT_ALB_admin_2.csv
+  name_field: Municipality
+  parent_field: County
+  alias_fields: []
+  slug_mode: transliterate
+
+search:
+  api_key_env: EXA_API_KEY
+  use_environment_proxy: false
+  minimum_passes: 2
+  max_passes: 3
+  num_results: 10
+  request_timeout_seconds: 60
+  document_terms:
+    - plani strategjik i zhvillimit të bashkisë
+    - plani strategjik i zhvillimit te bashkise
+    - strategjia e zhvillimit të bashkisë
+    - strategjia e zhvillimit te bashkise
+    - plani strategjik për zhvillimin e qëndrueshëm të komunitetit
+    - plani i zhvillimit vendor
+    - strategjia e zhvillimit vendor
+  final_terms:
+    - miratuar
+    - miratimi
+    - miratuar nga këshilli bashkiak
+    - përfundimtar
+    - final
+  draft_terms:
+    - draft
+    - projekt plan
+    - për konsultim publik
+    - dëgjesë publike
+    - në proces hartimi
+    - vendim për hartimin
+  official_domain_suffixes: [gov.al]
+
+review:
+  auto_accept_threshold: 0.90
+  minimum_margin: 0.10
+  require_formal_adoption_for_auto_accept: true
+  # Keep human approval required until held-out evaluation demonstrates the target precision.
+  auto_accept_enabled: false
+
+acquisition:
+  request_timeout_seconds: 120
+  download_retries: 4
+  min_file_bytes: 1024
+  max_file_bytes: 250000000
+
+storage:
+  bucket: wb-ldt
+  prefix: ldt/sources_albania/municipalities
