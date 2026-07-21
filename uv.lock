@@ -2705,6 +2705,8 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "google-auth" },
+    { name = "google-cloud-storage" },
+    { name = "google-crc32c" },
     { name = "openpyxl" },
     { name = "pyyaml" },
     { name = "requests" },
@@ -2746,6 +2748,8 @@ requires-dist = [
     { name = "geemap", marker = "extra == 'geo'", specifier = ">=0.35" },
     { name = "geopandas", marker = "extra == 'geo'", specifier = ">=1.0" },
     { name = "google-auth", specifier = ">=2.35" },
+    { name = "google-cloud-storage", specifier = ">=2.18" },
+    { name = "google-crc32c", specifier = ">=1.6" },
     { name = "matplotlib", marker = "extra == 'geo'", specifier = ">=3.9" },
     { name = "netcdf4", marker = "extra == 'geo'", specifier = ">=1.7" },
     { name = "numba", marker = "extra == 'geo'", specifier = ">=0.60" },

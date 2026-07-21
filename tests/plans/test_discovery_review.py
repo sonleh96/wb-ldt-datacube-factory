@@ -60,6 +60,12 @@ def _config(tmp_path: Path):
             "require_formal_adoption_for_auto_accept": True,
             "auto_accept_enabled": False,
         },
+        "acquisition": {
+            "request_timeout_seconds": 30,
+            "download_retries": 2,
+            "min_file_bytes": 10,
+            "max_file_bytes": 1000000,
+        },
         "storage": {"bucket": "bucket", "prefix": "plans/districts"},
     }
     path = tmp_path / "plans.yaml"

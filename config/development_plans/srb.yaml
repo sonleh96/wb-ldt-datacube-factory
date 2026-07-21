@@ -41,6 +41,12 @@ review:
   # Keep human approval required until held-out evaluation demonstrates the target precision.
   auto_accept_enabled: false
 
+acquisition:
+  request_timeout_seconds: 120
+  download_retries: 4
+  min_file_bytes: 1024
+  max_file_bytes: 250000000
+
 storage:
   bucket: wb-ldt
   prefix: ldt/sources/municipal

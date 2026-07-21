@@ -88,6 +88,10 @@ class DevelopmentPlanConfig:
         return self.raw["storage"]
 
     @property
+    def acquisition(self) -> dict[str, Any]:
+        return self.raw["acquisition"]
+
+    @property
     def api_key_env(self) -> str:
         return str(self.search.get("api_key_env", "EXA_API_KEY"))
 
@@ -190,6 +194,22 @@ def load_plan_config(
     if not prefix:
         raise PlanConfigError("storage.prefix cannot be the bucket root")
     storage["prefix"] = prefix
+
+    acquisition = _required_mapping(raw, "acquisition")
+    for field, default, minimum, maximum in (
+        ("request_timeout_seconds", 120, 1, 600),
+        ("download_retries", 4, 1, 10),
+        ("min_file_bytes", 1024, 1, 10_000_000),
+        ("max_file_bytes", 250_000_000, 1024, 5_000_000_000),
+    ):
+        value = acquisition.get(field, default)
+        if not isinstance(value, int) or not minimum <= value <= maximum:
+            raise PlanConfigError(
+                f"acquisition.{field} must be an integer from {minimum} to {maximum}"
+            )
+        acquisition[field] = value
+    if acquisition["min_file_bytes"] >= acquisition["max_file_bytes"]:
+        raise PlanConfigError("acquisition.min_file_bytes must be less than max_file_bytes")
 
     root_value = data_root or os.environ.get("LDT_DATA_ROOT") or raw.get("data_root")
     resolved_root = Path(root_value).resolve() if root_value else None

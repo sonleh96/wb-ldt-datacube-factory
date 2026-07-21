@@ -45,6 +45,12 @@ def _write_config(tmp_path: Path, registry_rows: list[dict[str, str]], **registr
             "minimum_margin": 0.1,
             "require_formal_adoption_for_auto_accept": True,
         },
+        "acquisition": {
+            "request_timeout_seconds": 30,
+            "download_retries": 2,
+            "min_file_bytes": 10,
+            "max_file_bytes": 1000000,
+        },
         "storage": {"bucket": "test-bucket", "prefix": "plans/districts"},
     }
     path = tmp_path / "plans.yaml"

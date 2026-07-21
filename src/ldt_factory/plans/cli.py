@@ -4,6 +4,7 @@ import argparse
 import datetime as dt
 from pathlib import Path
 
+from .acquisition import GCSObjectStore, acquire_approved
 from .config import load_plan_config
 from .discovery import discover_all
 from .exa import ExaClient
@@ -34,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--output")
     apply_review = configured("apply-review", run_id=True)
     apply_review.add_argument("--workbook", required=True)
+    configured("acquire", run_id=True)
     return parser
 
 
@@ -90,6 +92,21 @@ def main(argv: list[str] | None = None) -> int:
             areas,
         )
         print(destination)
+    elif args.command == "acquire":
+        config.prepare_run(args.run_id)
+        logger = configure_logging(
+            config.run_dir(args.run_id) / "logs" / "acquisition.jsonl",
+            "ldt.plans.acquisition",
+        )
+        documents = acquire_approved(
+            config,
+            areas,
+            run_id=args.run_id,
+            content_client=ExaClient.from_config(config),
+            object_store=GCSObjectStore(config.bucket),
+            logger=logger,
+        )
+        print(f"Verified GCS documents: {len(documents)}")
     return 0
 
 
