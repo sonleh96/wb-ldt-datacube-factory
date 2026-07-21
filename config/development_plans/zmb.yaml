@@ -1,0 +1,41 @@
+schema_version: 1
+
+country:
+  iso3: ZMB
+  name: Zambia
+  languages: [en]
+  admin2_types: [district, district council, town council, municipal council]
+
+# Relative paths resolve from --data-root or LDT_DATA_ROOT.
+workspace: plan_workflows/ZMB
+
+admin_registry:
+  path: countries/ZMB/datasets/GPBP_LDT_ZMB_admin_2.csv
+  id_field: ADM2CD_c
+  name_field: District
+  parent_field: Province
+  alias_fields: []
+  slug_mode: ascii_replace
+
+search:
+  api_key_env: EXA_API_KEY
+  max_passes: 3
+  num_results: 10
+  request_timeout_seconds: 60
+  document_terms:
+    - integrated development plan
+    - district integrated development plan
+    - district development plan
+    - IDP
+  final_terms: [approved, adopted, final, full version]
+  draft_terms: [draft, consultation, citizens version, citizen version]
+  official_domain_suffixes: [gov.zm]
+
+review:
+  auto_accept_threshold: 0.90
+  minimum_margin: 0.10
+  require_formal_adoption_for_auto_accept: true
+
+storage:
+  bucket: wb-ldt
+  prefix: ldt/sources_zambia/districts

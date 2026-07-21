@@ -1,0 +1,42 @@
+schema_version: 1
+
+country:
+  iso3: SRB
+  name: Serbia
+  languages: [sr-Cyrl, sr-Latn]
+  admin2_types: [општина, град, opstina, grad, municipality, city]
+
+# Relative paths resolve from --data-root or LDT_DATA_ROOT.
+workspace: plan_workflows/SRB
+
+admin_registry:
+  path: countries/SRB/datasets/GPBP_LDT_SRB_admin_2_v2.csv
+  name_field: District
+  parent_field: Province
+  alias_fields: []
+  # Preserve the legacy GCS folder convention shown by names such as ba-ka-palanka.
+  slug_mode: ascii_replace
+
+search:
+  api_key_env: EXA_API_KEY
+  max_passes: 3
+  num_results: 10
+  request_timeout_seconds: 60
+  document_terms:
+    - план развоја општине
+    - план развоја града
+    - план развоја јединице локалне самоуправе
+    - plan razvoja opstine
+    - plan razvoja grada
+  final_terms: [усвојен, усвојени, финални, usvojen, final]
+  draft_terms: [нацрт, јавна расправа, odluka o izradi, nacrt, draft]
+  official_domain_suffixes: [gov.rs, ls.gov.rs]
+
+review:
+  auto_accept_threshold: 0.90
+  minimum_margin: 0.10
+  require_formal_adoption_for_auto_accept: true
+
+storage:
+  bucket: wb-ldt
+  prefix: ldt/sources/municipal

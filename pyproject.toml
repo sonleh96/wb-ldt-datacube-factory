@@ -38,6 +38,7 @@ dev = ["pytest>=8"]
 
 [project.scripts]
 ldt-factory = "ldt_factory.cli:main"
+ldt-plans = "ldt_factory.plans.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
