@@ -79,6 +79,21 @@ heavy-memory, disk-heavy, Earth Engine, Google Drive download, and rate-limited 
 `ldt-plans` is an independent admin-2 development-plan discovery, review, and GCS acquisition workflow.
 It does not participate in the PIL indicator or scoring DAG and never blocks `ldt-factory run`.
 It performs native-language Exa searches, exports an Excel review queue, freshly revalidates approved documents, and deletes temporary files only after verified GCS publication.
+The committed profiles cover 61 Albanian municipalities, 161 Serbian municipalities, and 116 Zambian districts.
+Automatic acceptance is disabled, so acquisition requires an explicit reviewer approval.
+
+A safe discovery-only smoke test is:
+
+```powershell
+. .\secrets.ps1
+$run = "alb-plans-smoke-$(Get-Date -Format yyyyMMdd)"
+ldt-plans validate-config --config config/development_plans/alb.yaml
+ldt-plans discover --config config/development_plans/alb.yaml --run-id $run --limit 1
+ldt-plans export-review --config config/development_plans/alb.yaml --run-id $run
+```
+
+These commands use Exa and create local run artifacts, but they do not publish to GCS.
+Run `apply-review` and `acquire` only after reviewing the workbook and intentionally approving a document.
 See [the development-plan workflow guide](docs/development-plan-workflow.md) for the Albania, Serbia, and Zambia contracts, operator commands, acceptance policy, and evaluation metrics.
 
 ## Requirements
@@ -91,7 +106,10 @@ See [the development-plan workflow guide](docs/development-plan-workflow.md) for
   the optional Land Cover `gee_reduce_regions` backend.
 - An OpenWeatherMap API key for Air Pollution.
 - A Mapbox token for required Accessibility extraction.
+- An Exa API key for admin-2 development-plan discovery and fresh pre-download validation.
 - Google Application Default Credentials with Drive read-only scope when a source uses `provider: google_drive`.
+- Google Application Default Credentials with read and write access to the configured GCS prefixes when publishing approved development plans.
+- A spreadsheet application for manually reviewing the generated `.xlsx` workbooks.
 - About 21 GiB of shared cache space for the configured Heatwave and Ookla folders, plus working space for country outputs.
 
 The supported Conda environment name is `ldt-factory` on Windows, Linux, and macOS.
@@ -106,6 +124,7 @@ conda activate ldt-factory
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ldt-factory --help
+ldt-plans --help
 python -m pytest
 ```
 
@@ -197,8 +216,11 @@ Source sections contain only environment-variable names or non-secret source ide
 Create a local `secrets.ps1` in the repository root:
 
 ```powershell
+$env:LDT_DATA_ROOT = "D:/Work/WB/LDT"
 $env:EE_SERVICE_ACCOUNT = "service-account@example.iam.gserviceaccount.com"
 $env:EE_KEY_FILE = "D:/secure/location/earth-engine-key.json"
+$env:GOOGLE_APPLICATION_CREDENTIALS = $env:EE_KEY_FILE
+$env:EXA_API_KEY = "..."
 $env:OWM_API_KEY = "..."
 $env:MAPBOX_ACCESS_TOKEN = "..."  # Required only for Accessibility.
 ```
@@ -217,11 +239,17 @@ credential values.
 On Linux or macOS, export the equivalent values from a secret manager or an untracked shell file:
 
 ```bash
+export LDT_DATA_ROOT="/data/WB/LDT"
 export EE_SERVICE_ACCOUNT="service-account@example.iam.gserviceaccount.com"
 export EE_KEY_FILE="/secure/location/earth-engine-key.json"
+export GOOGLE_APPLICATION_CREDENTIALS="$EE_KEY_FILE"
+export EXA_API_KEY="..."
 export OWM_API_KEY="..."
 export MAPBOX_ACCESS_TOKEN="..."
 ```
+
+The development-plan workflow uses `EXA_API_KEY` for discovery and Google Application Default Credentials for GCS publication.
+The same service-account JSON used by Earth Engine can be reused by setting `GOOGLE_APPLICATION_CREDENTIALS` to `EE_KEY_FILE`, provided that identity has the required permissions on `wb-ldt`.
 
 Drive-backed sources use Google Application Default Credentials.
 The preferred local setup requests only the `drive.readonly` scope and requires a Desktop OAuth client downloaded from Google Cloud Console.
@@ -820,7 +848,7 @@ python -m pytest -q
 Tests cover configuration, contracts, orchestration state, resource limits,
 API caches, downloads, Flood batching, Internet filters, Heatwave processing,
 Land Cover calculations, Population aggregation, Transport geometry handling,
-and publication validation.
+publication validation, development-plan discovery and review, GCS acquisition safeguards, and evaluation metrics.
 
 GitHub Actions repeats the documented requirements installation and test suite on Ubuntu x64, Windows x64, macOS Intel, and macOS ARM64.
 It also verifies that `uv.lock` is current and can create a complete locked environment.
@@ -829,12 +857,16 @@ It also verifies that `uv.lock` is current and can create a complete locked envi
 
 ```text
 config/countries/             country YAML files
+config/development_plans/     admin-2 development-plan country profiles
+docs/development-plan-workflow.md
+                              plan discovery, review, publishing, and evaluation guide
 docs/notebook-audit.md        notebook contradictions and methodology decisions
 docs/cross-platform-deployment-plan.md
                               deployment phases and acceptance criteria
 environment.yml               ldt-factory Conda environment definition
 src/ldt_factory/              CLI, orchestration, state, I/O, and shared helpers
 src/ldt_factory/domains/      per-domain extract and process modules
+src/ldt_factory/plans/        standalone development-plan workflow
 tests/                        regression and contract tests
 uv.lock                       universal dependency lock
 ```
