@@ -9,6 +9,7 @@ description = "Config-driven modular extraction and processing for the WB LDT da
 requires-python = ">=3.11"
 dependencies = [
   "google-auth>=2.35",
+  "openpyxl>=3.1",
   "PyYAML>=6.0",
   "requests>=2.31",
   "urllib3>=2.0",

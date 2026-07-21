@@ -19,6 +19,8 @@ admin_registry:
 
 search:
   api_key_env: EXA_API_KEY
+  use_environment_proxy: false
+  minimum_passes: 2
   max_passes: 3
   num_results: 10
   request_timeout_seconds: 60
@@ -35,6 +37,8 @@ review:
   auto_accept_threshold: 0.90
   minimum_margin: 0.10
   require_formal_adoption_for_auto_accept: true
+  # Keep human approval required until held-out evaluation demonstrates the target precision.
+  auto_accept_enabled: false
 
 storage:
   bucket: wb-ldt

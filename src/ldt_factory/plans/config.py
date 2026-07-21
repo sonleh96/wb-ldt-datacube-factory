@@ -155,6 +155,7 @@ def load_plan_config(
     search["official_domain_suffixes"] = list(_text_list(search, "official_domain_suffixes"))
     search["api_key_env"] = _required_text(search, "api_key_env")
     for field, default, minimum, maximum in (
+        ("minimum_passes", 2, 1, 3),
         ("max_passes", 3, 1, 3),
         ("num_results", 10, 1, 100),
         ("request_timeout_seconds", 60, 1, 300),
@@ -163,6 +164,12 @@ def load_plan_config(
         if not isinstance(value, int) or not minimum <= value <= maximum:
             raise PlanConfigError(f"search.{field} must be an integer from {minimum} to {maximum}")
         search[field] = value
+    if search["minimum_passes"] > search["max_passes"]:
+        raise PlanConfigError("search.minimum_passes cannot exceed search.max_passes")
+    use_proxy = search.get("use_environment_proxy", False)
+    if not isinstance(use_proxy, bool):
+        raise PlanConfigError("search.use_environment_proxy must be true or false")
+    search["use_environment_proxy"] = use_proxy
 
     review = _required_mapping(raw, "review")
     for field, default in (("auto_accept_threshold", 0.9), ("minimum_margin", 0.1)):
@@ -171,6 +178,11 @@ def load_plan_config(
             raise PlanConfigError(f"review.{field} must be between 0 and 1")
         review[field] = float(value)
     review.setdefault("require_formal_adoption_for_auto_accept", True)
+    for field in ("require_formal_adoption_for_auto_accept", "auto_accept_enabled"):
+        value = review.get(field, False)
+        if not isinstance(value, bool):
+            raise PlanConfigError(f"review.{field} must be true or false")
+        review[field] = value
 
     storage = _required_mapping(raw, "storage")
     _required_text(storage, "bucket")
